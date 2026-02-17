@@ -7,6 +7,7 @@ let ws = null;
 let clientId = null;
 let connected = false;
 let devices = [];
+let stepStartTimes = {};
 
 // DOM Elements
 const elements = {
@@ -162,8 +163,12 @@ function toggleConnection() {
 
     // Show progress, reset steps
     elements.connectProgress.style.display = 'flex';
+    stepStartTimes = {};
     ['stepConnect', 'stepProvision', 'stepAuth', 'stepSubscribe'].forEach(id => {
-      elements[id].className = 'step';
+      const el = elements[id];
+      el.className = 'step';
+      el.querySelector('.step-detail').textContent = '';
+      el.querySelector('.step-time').textContent = '';
     });
 
     elements.btnConnect.disabled = true;
@@ -175,8 +180,33 @@ function toggleConnection() {
 // Connect Progress
 function updateProgress(data) {
   const stepEl = document.getElementById(`step-${data.step}`);
-  if (stepEl) {
-    stepEl.className = `step ${data.status}`;
+  if (!stepEl) return;
+
+  stepEl.className = `step ${data.status}`;
+
+  // Detail text
+  const detailEl = stepEl.querySelector('.step-detail');
+  if (detailEl && data.detail) {
+    detailEl.textContent = data.detail;
+  }
+
+  // Elapsed time tracking
+  const timeEl = stepEl.querySelector('.step-time');
+  if (data.status === 'in_progress') {
+    stepStartTimes[data.step] = Date.now();
+    if (timeEl) timeEl.textContent = '';
+  } else if (stepStartTimes[data.step] && timeEl) {
+    const elapsed = Date.now() - stepStartTimes[data.step];
+    timeEl.textContent = formatElapsed(elapsed);
+  }
+
+  // Icon update
+  const iconEl = stepEl.querySelector('.step-icon');
+  if (iconEl) {
+    if (data.status === 'done') iconEl.innerHTML = '&#10003;';       // checkmark
+    else if (data.status === 'failed') iconEl.innerHTML = '&#10007;'; // cross
+    else if (data.status === 'skipped') iconEl.innerHTML = '&#8722;'; // minus
+    else if (data.status === 'in_progress') iconEl.innerHTML = '&#9679;'; // dot
   }
 
   // Re-enable buttons when flow completes or fails
@@ -187,6 +217,11 @@ function updateProgress(data) {
     elements.btnConnect.disabled = false;
     elements.btnScan.disabled = false;
   }
+}
+
+function formatElapsed(ms) {
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
 }
 
 // UI Updates

@@ -254,8 +254,9 @@ async def _connect_and_auth(client_id: str, address: str):
         await broadcast_log("INFO", f"Provisioned key: {key_id}")
     except Exception as e:
         # Provision may fail if key already registered — continue to auth
-        await _broadcast_progress("provision", "skipped", str(e))
-        await broadcast_log("INFO", f"Provision skipped (key may exist): {e}")
+        detail = "Key already registered" if "NotPermitted" in str(e) else str(e)
+        await _broadcast_progress("provision", "skipped", detail)
+        await broadcast_log("INFO", f"Provision skipped: {detail}")
 
     # Step 3: Authenticate
     await _broadcast_progress("auth", "in_progress")

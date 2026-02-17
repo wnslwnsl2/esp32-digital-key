@@ -10,8 +10,8 @@ typedef enum {
     DK_ZONE_IMMEDIATE = 3,  /* > -55 dBm */
 } dk_zone_t;
 
-#define DK_RSSI_THRESHOLD_FAR       (-80)
-#define DK_RSSI_THRESHOLD_IMMEDIATE (-55)
+#define DK_RSSI_THRESHOLD_FAR       (-55)
+#define DK_RSSI_THRESHOLD_IMMEDIATE (-35)
 #define DK_RSSI_WINDOW_SIZE      5
 #define DK_ZONE_HOLD_TICKS       10  /* 10 * 200ms = 2 seconds */
 
