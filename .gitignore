@@ -1,0 +1,18 @@
+# ESP-IDF build
+firmware/build/
+firmware/sdkconfig
+firmware/sdkconfig.old
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+*.whl
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store

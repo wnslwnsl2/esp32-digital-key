@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "esp32-dk-client"
+version = "0.1.0"
+description = "BLE client for ESP32 Digital Key system"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+dependencies = [
+    "bleak>=0.21.0",
+    "cryptography>=41.0.0",
+]
+
+[project.scripts]
+dk-client = "dk_client.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["dk_client"]
