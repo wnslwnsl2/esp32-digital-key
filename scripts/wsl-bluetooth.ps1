@@ -1,6 +1,5 @@
 # WSL2 USB passthrough - run as Administrator
-# Intel Wireless Bluetooth (BUSID 2-14)
-# ESP32-S3 USB JTAG/serial (BUSID 3-1)
+# VID:PID로 장치를 찾으므로 BUSID가 변경되어도 동작합니다.
 #
 # Usage:
 #   .\wsl-bluetooth.ps1           # Attach all to WSL
@@ -10,23 +9,49 @@ param(
     [switch]$Detach
 )
 
+# ── Device VID:PID ──────────────────────────────────────
+$devices = @{
+    "Bluetooth" = "8087:0026"   # Intel Wireless Bluetooth
+    "ESP32"     = "303a:1001"   # USB JTAG/serial debug unit
+}
+
+function Find-BusId($hwid) {
+    $lines = usbipd list 2>$null
+    foreach ($line in $lines) {
+        if ($line -match "^\s*(\d+-\d+)\s+$([regex]::Escape($hwid))") {
+            return $Matches[1]
+        }
+    }
+    return $null
+}
+
 if ($Detach) {
     Write-Host "Detaching devices from WSL..."
-    usbipd detach --busid 2-14
-    usbipd detach --busid 3-1
+    foreach ($name in $devices.Keys) {
+        $busid = Find-BusId $devices[$name]
+        if ($busid) {
+            usbipd detach --busid $busid
+            Write-Host "  $name ($($devices[$name])) detached (BUSID $busid)"
+        } else {
+            Write-Host "  $name ($($devices[$name])) not found, skipping"
+        }
+    }
     Write-Host "Done. Devices returned to Windows."
 } else {
-    # Bluetooth
-    Write-Host "Attaching Bluetooth to WSL..."
-    usbipd bind --busid 2-14
-    usbipd attach --wsl --busid 2-14
-
-    # ESP32
-    Write-Host "Attaching ESP32 to WSL..."
-    usbipd bind --busid 3-1
-    usbipd attach --wsl --busid 3-1
+    foreach ($name in $devices.Keys) {
+        $hwid = $devices[$name]
+        $busid = Find-BusId $hwid
+        if (-not $busid) {
+            Write-Host "  $name ($hwid) not found, skipping" -ForegroundColor Yellow
+            continue
+        }
+        Write-Host "Attaching $name ($hwid, BUSID $busid) to WSL..."
+        usbipd bind --busid $busid 2>$null
+        usbipd attach --wsl --busid $busid
+    }
 
     # Start BlueZ
+    Write-Host ""
     Write-Host "Starting BlueZ in WSL..."
     wsl -u root service bluetooth start
     wsl bluetoothctl show
