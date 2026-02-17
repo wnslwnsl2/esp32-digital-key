@@ -1,5 +1,6 @@
 #include "dk_proximity.h"
 #include "dk_auth.h"
+#include "dk_lock.h"
 
 #include <string.h>
 #include "esp_log.h"
@@ -39,15 +40,36 @@ static dk_zone_t zone_from_rssi(int8_t rssi)
 
 static esp_timer_handle_t s_timer = NULL;
 
-static void rssi_poll_cb(void *arg)
+static void check_auto_lock(dk_conn_state_t *conn, dk_zone_t zone, uint16_t h)
 {
-    for (int i = 0; i < DK_MAX_CONNECTIONS; i++) {
-        dk_conn_state_t *conn = DkAuth_FindConn(0xFFFF);
-        /* Iterate all valid connections */
-        /* We need to scan by index — use internal knowledge */
+    if (conn->auth_state != DK_AUTH_OK) return;
+
+    if (zone == conn->prev_zone) {
+        if (conn->zone_hold_count < DK_ZONE_HOLD_TICKS) {
+            conn->zone_hold_count++;
+        }
+    } else {
+        /* Zone changed — reset counter */
+        conn->prev_zone = zone;
+        conn->zone_hold_count = 0;
+        return;
     }
 
-    /* Simpler: iterate possible conn_handles 0..CONFIG_BT_NIMBLE_MAX_CONNECTIONS */
+    /* Only act when zone has been stable for DK_ZONE_HOLD_TICKS */
+    if (conn->zone_hold_count != DK_ZONE_HOLD_TICKS) return;
+
+    dk_lock_state_t lock = DkLock_GetState();
+    if (zone == DK_ZONE_IMMEDIATE && lock == DK_LOCK_LOCKED) {
+        DkLock_Command(h, 1); /* unlock */
+        ESP_LOGI(TAG, "auto-unlock: zone immediate (conn=%d)", h);
+    } else if (zone != DK_ZONE_IMMEDIATE && lock == DK_LOCK_UNLOCKED) {
+        DkLock_Command(h, 0); /* lock */
+        ESP_LOGI(TAG, "auto-lock: left immediate (conn=%d)", h);
+    }
+}
+
+static void rssi_poll_cb(void *arg)
+{
     for (uint16_t h = 0; h < 16; h++) {
         dk_conn_state_t *conn = DkAuth_FindConn(h);
         if (!conn) continue;
@@ -58,6 +80,11 @@ static void rssi_poll_cb(void *arg)
 
         conn->rssi_buf[conn->rssi_idx % DK_RSSI_WINDOW_SIZE] = rssi;
         conn->rssi_idx++;
+
+        if (conn->rssi_idx >= DK_RSSI_WINDOW_SIZE) {
+            dk_zone_t zone = zone_from_rssi(median_of_5(conn->rssi_buf));
+            check_auto_lock(conn, zone, h);
+        }
     }
 }
 

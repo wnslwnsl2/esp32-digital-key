@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+import subprocess
+import sys
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -10,6 +12,20 @@ from bleak import BleakClient, BleakScanner
 from .protocol import DEVICE_PREFIX
 
 logger = logging.getLogger(__name__)
+
+
+def _bluez_remove(address: str):
+    """Remove device from BlueZ cache to ensure clean connection."""
+    if sys.platform != "linux":
+        return
+    try:
+        subprocess.run(
+            ["bluetoothctl", "remove", address],
+            capture_output=True, timeout=5,
+        )
+        logger.debug(f"bluez cache cleared for {address}")
+    except Exception:
+        pass
 
 
 @dataclass
@@ -44,10 +60,23 @@ class DkBleClient:
 
     async def connect(self) -> bool:
         self.client = BleakClient(self.address)
-        connected = await self.client.connect()
-        if connected:
+        try:
+            await self.client.connect()
+        except Exception as e:
+            logger.warning(f"connect failed ({e}), clearing BlueZ cache and retrying...")
+            _bluez_remove(self.address)
+            self.client = BleakClient(self.address)
+            try:
+                await self.client.connect()
+            except Exception as e2:
+                logger.error(f"connect retry failed: {e2}")
+                return False
+
+        if self.client.is_connected:
             logger.info(f"connected to {self.address}")
-        return connected
+            return True
+        logger.error(f"not connected after connect() for {self.address}")
+        return False
 
     async def disconnect(self):
         if self.client and self.client.is_connected:

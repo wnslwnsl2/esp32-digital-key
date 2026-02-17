@@ -1,5 +1,6 @@
 #include "dk_auth.h"
 #include "dk_keystore.h"
+#include "dk_led.h"
 #include "dk_lock.h"
 #include "dk_proximity.h"
 #include "dk_service.h"
@@ -51,6 +52,7 @@ void app_main(void)
     DkAuth_Init();
     DkKeystore_Init();
     DkLock_Init();
+    DkLed_Init();
 
     /* BLE stack + GATT service */
     BleStack_SetConnectCb(on_connect);

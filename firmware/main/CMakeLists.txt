@@ -5,6 +5,7 @@ idf_component_register(
          "dk_keystore.c"
          "dk_proximity.c"
          "dk_lock.c"
+         "dk_led.c"
     INCLUDE_DIRS "."
-    REQUIRES bt nvs_flash ble_stack mbedtls esp_timer
+    REQUIRES bt nvs_flash ble_stack mbedtls esp_timer led_strip
 )

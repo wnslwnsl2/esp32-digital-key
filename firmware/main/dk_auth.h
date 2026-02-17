@@ -23,6 +23,8 @@ typedef struct {
     uint8_t         rssi_idx;
     bool            status_subscribed;
     bool            auth_subscribed;
+    uint8_t         prev_zone;
+    uint8_t         zone_hold_count;
 } dk_conn_state_t;
 
 esp_err_t DkAuth_Init(void);

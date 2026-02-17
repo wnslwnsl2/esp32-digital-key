@@ -1,5 +1,6 @@
 #include "dk_lock.h"
 #include "dk_auth.h"
+#include "dk_led.h"
 #include "dk_proximity.h"
 
 #include "esp_log.h"
@@ -43,10 +44,12 @@ esp_err_t DkLock_Command(uint16_t conn_handle, uint8_t cmd)
             return ESP_ERR_INVALID_STATE;
         }
         s_state = DK_LOCK_UNLOCKED;
+        DkLed_SetUnlocked();
         ESP_LOGI(TAG, "UNLOCKED by conn=%d", conn_handle);
     } else {
         /* Lock: no proximity requirement */
         s_state = DK_LOCK_LOCKED;
+        DkLed_SetLocked();
         ESP_LOGI(TAG, "LOCKED by conn=%d", conn_handle);
     }
 

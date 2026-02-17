@@ -11,10 +11,16 @@ license = {text = "MIT"}
 dependencies = [
     "bleak>=0.21.0",
     "cryptography>=41.0.0",
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
 ]
 
 [project.scripts]
 dk-client = "dk_client.main:main"
+dk-web = "dk_client.server:main"
+
+[tool.hatch.build.targets.sdist]
+include = ["dk_client/**/*"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["dk_client"]

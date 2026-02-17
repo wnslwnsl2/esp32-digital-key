@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Digital Key</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Digital Key</h1>
+    </header>
+
+    <!-- Connection -->
+    <div class="card">
+      <h2>Connection</h2>
+      <div class="button-group">
+        <button id="btn-scan" class="btn btn-primary">Scan</button>
+        <select id="device-select" disabled>
+          <option value="">Select a device</option>
+        </select>
+        <button id="btn-connect" class="btn btn-success" disabled>Connect</button>
+      </div>
+      <div id="connect-progress" class="progress-steps" style="display: none;">
+        <div class="step" id="step-connect"><span class="step-icon">&#9679;</span> Connect</div>
+        <div class="step" id="step-provision"><span class="step-icon">&#9679;</span> Provision</div>
+        <div class="step" id="step-auth"><span class="step-icon">&#9679;</span> Authenticate</div>
+        <div class="step" id="step-subscribe"><span class="step-icon">&#9679;</span> Status</div>
+      </div>
+    </div>
+
+    <!-- Lock Status -->
+    <div class="card">
+      <div class="lock-status-display">
+        <div id="lock-indicator" class="lock-indicator locked"></div>
+        <span id="lock-state-text">LOCKED</span>
+      </div>
+    </div>
+
+    <!-- System Status -->
+    <div class="card">
+      <h2>System Status</h2>
+      <div class="info-grid">
+        <div class="info-item">
+          <label>Auth</label>
+          <span id="status-auth">-</span>
+        </div>
+        <div class="info-item">
+          <label>Zone</label>
+          <span id="status-zone">-</span>
+        </div>
+        <div class="info-item">
+          <label>RSSI</label>
+          <span id="status-rssi">-</span>
+        </div>
+        <div class="info-item">
+          <label>Lock</label>
+          <span id="status-lock">-</span>
+        </div>
+        <div class="info-item">
+          <label>Registered Keys</label>
+          <span id="status-reg-keys">-</span>
+        </div>
+        <div class="info-item">
+          <label>Pending Keys</label>
+          <span id="status-pend-keys">-</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Key Management -->
+    <div class="card">
+      <h2>Key Management</h2>
+      <div class="key-mgmt-form">
+        <div class="form-group">
+          <label for="key-id-input">Key ID</label>
+          <input type="text" id="key-id-input" placeholder="Enter key ID" maxlength="16">
+        </div>
+        <div class="button-group">
+          <button id="btn-approve" class="btn btn-success" disabled>Approve</button>
+          <button id="btn-delete" class="btn btn-danger" disabled>Delete</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Log -->
+    <div class="card">
+      <h2>Log</h2>
+      <div id="log-container"></div>
+    </div>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

@@ -257,11 +257,11 @@ esp_err_t BleStack_Init(const struct ble_gatt_svc_def *gatt_svcs)
     ble_hs_cfg.gatts_register_cb = gatt_svr_register_cb;
     ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
 
-    /* No bonding needed for this demo */
+    /* Just Works pairing (no PIN, no bonding) */
     ble_hs_cfg.sm_io_cap = BLE_HS_IO_NO_INPUT_OUTPUT;
     ble_hs_cfg.sm_bonding = 0;
     ble_hs_cfg.sm_mitm = 0;
-    ble_hs_cfg.sm_sc = 0;
+    ble_hs_cfg.sm_sc = 1;
 
     xTaskCreate(nimble_host_task, "nimble", 8 * 1024, NULL, 5, NULL);
 

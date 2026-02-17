@@ -23,6 +23,7 @@ def generate_key_id() -> str:
 def load_or_create_key(key_id: str | None = None) -> tuple[str, ec.EllipticCurvePrivateKey]:
     """Load existing key or create a new one.
 
+    If key_id is None, reuses the first existing key found in ~/.dk-client/.
     Returns (key_id, private_key).
     """
     key_dir = get_key_dir()
@@ -30,6 +31,16 @@ def load_or_create_key(key_id: str | None = None) -> tuple[str, ec.EllipticCurve
     if key_id:
         pem_path = key_dir / f"{key_id}.pem"
         if pem_path.exists():
+            pem = pem_path.read_bytes()
+            pk = serialization.load_pem_private_key(pem, password=None)
+            return key_id, pk
+
+    # Try to reuse existing key
+    if not key_id:
+        existing = sorted(key_dir.glob("*.pem"))
+        if existing:
+            pem_path = existing[0]
+            key_id = pem_path.stem
             pem = pem_path.read_bytes()
             pk = serialization.load_pem_private_key(pem, password=None)
             return key_id, pk
@@ -46,7 +57,6 @@ def load_or_create_key(key_id: str | None = None) -> tuple[str, ec.EllipticCurve
     )
     pem_path = key_dir / f"{key_id}.pem"
     pem_path.write_bytes(pem)
-    print(f"[crypto] new key generated: {key_id} → {pem_path}")
 
     return key_id, pk
 

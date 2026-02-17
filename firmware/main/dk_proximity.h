@@ -12,10 +12,12 @@ typedef enum {
 
 #define DK_RSSI_THRESHOLD_FAR       (-80)
 #define DK_RSSI_THRESHOLD_IMMEDIATE (-55)
-#define DK_RSSI_WINDOW_SIZE 5
+#define DK_RSSI_WINDOW_SIZE      5
+#define DK_ZONE_HOLD_TICKS       10  /* 10 * 200ms = 2 seconds */
 
 /**
  * Start periodic RSSI polling timer (200ms).
+ * Includes zone hysteresis and auto lock/unlock.
  */
 esp_err_t DkProximity_Init(void);
 

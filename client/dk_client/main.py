@@ -7,6 +7,8 @@ import sys
 from .ble import DkBleClient, scan
 from .crypto import load_or_create_key, get_public_key_bytes, sign_challenge
 from .protocol import (
+    AUTH_NAMES,
+    AUTH_OK,
     CHR_AUTH_STATE,
     CHR_CHALLENGE,
     CHR_KEY_MGMT,
@@ -16,90 +18,215 @@ from .protocol import (
     CHR_SYSTEM_STATUS,
     KEY_MGMT_APPROVE,
     KEY_MGMT_DELETE,
+    LOCK_NAMES,
+    ZONE_NAMES,
     SystemStatus,
 )
 
 
+def _header(title: str):
+    print(f"\n── {title} " + "─" * max(1, 44 - len(title)))
+
+
+def _info(label: str, value: str):
+    print(f"   {label + ':':<14} {value}")
+
+
+def _ok(msg: str):
+    print(f"   ✓ {msg}")
+
+
+def _fail(msg: str):
+    print(f"   ✗ {msg}")
+
+
+def _show_key(key_id: str, pk):
+    """Display loaded key info."""
+    from pathlib import Path
+    _header("Key")
+    pem_path = Path.home() / ".dk-client" / f"{key_id}.pem"
+    _info("Key ID", key_id)
+    _info("Key file", str(pem_path))
+    pubkey = get_public_key_bytes(pk)
+    _info("Public key", f"{pubkey[:4].hex()}...{pubkey[-4:].hex()} ({len(pubkey)} bytes)")
+
+
+async def _connect(client: DkBleClient):
+    """Connect with progress display."""
+    _header("Connect")
+    print(f"   Connecting to {client.address}...")
+    ok = await client.connect()
+    if not ok:
+        _fail("Connection failed")
+        sys.exit(1)
+    _ok("Connected")
+
+
+async def _disconnect(client: DkBleClient):
+    _header("Disconnect")
+    await client.disconnect()
+    _ok("Disconnected")
+    print()
+
+
+async def _authenticate(client: DkBleClient, key_id: str, pk) -> bool:
+    """Perform challenge-response auth with progress display.
+
+    Returns True if authenticated.
+    """
+    _header("Challenge")
+    print("   Reading challenge from device...")
+    challenge = await client.read(CHR_CHALLENGE)
+    _info("Challenge", f"{challenge.hex()} ({len(challenge)} bytes)")
+
+    _header("Sign")
+    print("   Signing with ECDSA-SHA256...")
+    sig = sign_challenge(pk, challenge)
+    _info("Signature", f"{sig[:8].hex()}... ({len(sig)} bytes DER)")
+
+    _header("Authenticate")
+    key_id_bytes = key_id.encode("ascii").ljust(16, b"\x00")[:16]
+    payload = key_id_bytes + sig
+    _info("Payload", f"key_id({len(key_id_bytes)}) + sig({len(sig)}) = {len(payload)} bytes")
+    print("   Writing response...")
+    await client.write(CHR_RESPONSE, payload)
+
+    state = await client.read(CHR_AUTH_STATE)
+    state_val = state[0]
+    state_name = AUTH_NAMES.get(state_val, f"unknown({state_val})")
+    if state_val == AUTH_OK:
+        _ok(f"Auth state: {state_name}")
+        return True
+    else:
+        _fail(f"Auth state: {state_name}")
+        return False
+
+
+# ── Commands ─────────────────────────────────────────────
+
+
 async def cmd_scan(args):
-    print("Scanning for DK devices...")
+    print(f"Scanning for DK devices ({args.timeout}s)...")
     devices = await scan(timeout=args.timeout)
     if not devices:
         print("No devices found.")
         return
+    print(f"\nFound {len(devices)} device(s):\n")
     for d in devices:
-        print(f"  {d.name}  {d.address}  RSSI={d.rssi}")
+        print(f"  {d.name:<12} {d.address}   RSSI: {d.rssi} dBm")
+    print()
 
 
 async def cmd_provision(args):
     key_id, pk = load_or_create_key()
-    pubkey = get_public_key_bytes(pk)
+    _show_key(key_id, pk)
 
     client = DkBleClient(args.addr)
-    await client.connect()
+    await _connect(client)
 
-    # key_id(16 bytes, left-padded with null) + pubkey(65 bytes)
+    _header("Provision")
+    pubkey = get_public_key_bytes(pk)
     key_id_bytes = key_id.encode("ascii").ljust(16, b"\x00")[:16]
     data = key_id_bytes + pubkey
+    _info("Key ID", f"{key_id} ({len(key_id_bytes)} bytes)")
+    _info("Public key", f"{pubkey[:4].hex()}...{pubkey[-4:].hex()} ({len(pubkey)} bytes)")
+    _info("Payload", f"{len(data)} bytes")
+    print("   Writing provision data...")
     await client.write(CHR_PROVISION, data)
-    print(f"Provisioned key: {key_id}")
+    _ok("Provisioned")
 
-    await client.disconnect()
+    await _disconnect(client)
 
 
 async def cmd_auth(args):
     key_id, pk = load_or_create_key()
+    _show_key(key_id, pk)
 
     client = DkBleClient(args.addr)
-    await client.connect()
-
-    # Read challenge
-    challenge = await client.read(CHR_CHALLENGE)
-    print(f"Challenge: {challenge.hex()[:16]}...")
-
-    # Sign
-    sig = sign_challenge(pk, challenge)
-
-    # Write response: key_id(16) + sig
-    key_id_bytes = key_id.encode("ascii").ljust(16, b"\x00")[:16]
-    await client.write(CHR_RESPONSE, key_id_bytes + sig)
-
-    # Read auth state
-    state = await client.read(CHR_AUTH_STATE)
-    print(f"Auth state: {state[0]}")
-
-    await client.disconnect()
+    await _connect(client)
+    await _authenticate(client, key_id, pk)
+    await _disconnect(client)
 
 
 async def cmd_unlock(args):
+    key_id, pk = load_or_create_key()
+    _show_key(key_id, pk)
+
     client = DkBleClient(args.addr)
-    await client.connect()
+    await _connect(client)
 
+    ok = await _authenticate(client, key_id, pk)
+    if not ok:
+        await _disconnect(client)
+        return
+
+    _header("Unlock")
+    print("   Sending unlock command...")
     await client.write(CHR_LOCK_CMD, bytes([0x01]))
-    print("Unlock command sent.")
+    _ok("Unlock command sent")
 
-    await client.disconnect()
+    await _disconnect(client)
 
 
 async def cmd_lock(args):
+    key_id, pk = load_or_create_key()
+    _show_key(key_id, pk)
+
     client = DkBleClient(args.addr)
-    await client.connect()
+    await _connect(client)
 
+    ok = await _authenticate(client, key_id, pk)
+    if not ok:
+        await _disconnect(client)
+        return
+
+    _header("Lock")
+    print("   Sending lock command...")
     await client.write(CHR_LOCK_CMD, bytes([0x00]))
-    print("Lock command sent.")
+    _ok("Lock command sent")
 
-    await client.disconnect()
+    await _disconnect(client)
 
 
 async def cmd_status(args):
-    client = DkBleClient(args.addr)
-    await client.connect()
+    key_id, pk = load_or_create_key()
+    _show_key(key_id, pk)
 
-    print("Monitoring status (Ctrl+C to stop)...")
+    client = DkBleClient(args.addr)
+    await _connect(client)
+
+    ok = await _authenticate(client, key_id, pk)
+    if not ok:
+        await _disconnect(client)
+        return
+
+    _header("Status Monitor")
+    print("   Subscribing to system status notifications...")
+
+    first = True
 
     def on_status(data: bytes):
+        nonlocal first
         st = SystemStatus.from_bytes(data)
-        # Clear line and print
-        print(f"\r{st.display()}", end="", flush=True)
+        if first:
+            _ok("Subscribed — streaming (Ctrl+C to stop)\n")
+            # Print column header
+            print(
+                f"   {'Auth':<14} {'Zone':<10} {'RSSI':>8}   "
+                f"{'Lock':<10} {'Keys':>12}"
+            )
+            print("   " + "─" * 58)
+            first = False
+
+        auth = AUTH_NAMES.get(st.auth_state, "?")
+        zone = ZONE_NAMES.get(st.zone_level, "?")
+        lock = LOCK_NAMES.get(st.lock_state, "?")
+        keys = f"{st.registered_keys} reg / {st.pending_keys} pend"
+        print(
+            f"\r   {auth:<14} {zone:<10} {st.rssi:>5} dBm   "
+            f"{lock:<10} {keys:>12}",
+            end="", flush=True,
+        )
 
     await client.subscribe(CHR_SYSTEM_STATUS, on_status)
 
@@ -110,59 +237,53 @@ async def cmd_status(args):
         pass
     finally:
         print()
-        await client.disconnect()
+        await _disconnect(client)
 
 
 async def cmd_approve(args):
     key_id, pk = load_or_create_key()
+    _show_key(key_id, pk)
 
     client = DkBleClient(args.addr)
-    await client.connect()
+    await _connect(client)
 
-    # First authenticate as owner
-    challenge = await client.read(CHR_CHALLENGE)
-    sig = sign_challenge(pk, challenge)
-    key_id_bytes = key_id.encode("ascii").ljust(16, b"\x00")[:16]
-    await client.write(CHR_RESPONSE, key_id_bytes + sig)
-
-    state = await client.read(CHR_AUTH_STATE)
-    if state[0] != 3:
-        print(f"Auth failed (state={state[0]}). Only owner can approve.")
-        await client.disconnect()
+    ok = await _authenticate(client, key_id, pk)
+    if not ok:
+        _fail("Only owner can approve keys")
+        await _disconnect(client)
         return
 
-    # Approve the pending key
+    _header("Approve Key")
+    _info("Target key", args.key_id)
     target_id = args.key_id.encode("ascii").ljust(16, b"\x00")[:16]
+    print("   Writing approve command...")
     await client.write(CHR_KEY_MGMT, bytes([KEY_MGMT_APPROVE]) + target_id)
-    print(f"Approved key: {args.key_id}")
+    _ok(f"Key approved: {args.key_id}")
 
-    await client.disconnect()
+    await _disconnect(client)
 
 
 async def cmd_delete(args):
     key_id, pk = load_or_create_key()
+    _show_key(key_id, pk)
 
     client = DkBleClient(args.addr)
-    await client.connect()
+    await _connect(client)
 
-    # Authenticate as owner
-    challenge = await client.read(CHR_CHALLENGE)
-    sig = sign_challenge(pk, challenge)
-    key_id_bytes = key_id.encode("ascii").ljust(16, b"\x00")[:16]
-    await client.write(CHR_RESPONSE, key_id_bytes + sig)
-
-    state = await client.read(CHR_AUTH_STATE)
-    if state[0] != 3:
-        print(f"Auth failed (state={state[0]}). Only owner can delete.")
-        await client.disconnect()
+    ok = await _authenticate(client, key_id, pk)
+    if not ok:
+        _fail("Only owner can delete keys")
+        await _disconnect(client)
         return
 
-    # Delete key
+    _header("Delete Key")
+    _info("Target key", args.key_id)
     target_id = args.key_id.encode("ascii").ljust(16, b"\x00")[:16]
+    print("   Writing delete command...")
     await client.write(CHR_KEY_MGMT, bytes([KEY_MGMT_DELETE]) + target_id)
-    print(f"Deleted key: {args.key_id}")
+    _ok(f"Key deleted: {args.key_id}")
 
-    await client.disconnect()
+    await _disconnect(client)
 
 
 def main():
