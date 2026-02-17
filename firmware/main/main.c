@@ -1,4 +1,5 @@
 #include "dk_auth.h"
+#include "dk_button.h"
 #include "dk_keystore.h"
 #include "dk_led.h"
 #include "dk_lock.h"
@@ -68,6 +69,9 @@ void app_main(void)
     /* Start RSSI polling + status notify */
     DkProximity_Init();
     DkService_StartStatusTimer();
+
+    /* Factory reset button (GPIO 0 long press) */
+    DkButton_Init();
 
     ESP_LOGI(TAG, "Digital Key system ready");
 }

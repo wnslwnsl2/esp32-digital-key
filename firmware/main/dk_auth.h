@@ -42,3 +42,6 @@ esp_err_t DkAuth_VerifyResponse(dk_conn_state_t *conn,
 /** Query */
 uint8_t DkAuth_ActiveCount(void);
 bool    DkAuth_IsOwner(dk_conn_state_t *conn);
+
+/** Terminate all active BLE connections. */
+void DkAuth_DisconnectAll(void);

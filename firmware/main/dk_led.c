@@ -39,3 +39,13 @@ void DkLed_SetUnlocked(void)
     led_strip_set_pixel(s_strip, 0, 0, 32, 0);
     led_strip_refresh(s_strip);
 }
+
+void DkLed_SetColor(uint8_t r, uint8_t g, uint8_t b)
+{
+    if (r == 0 && g == 0 && b == 0) {
+        led_strip_clear(s_strip);
+    } else {
+        led_strip_set_pixel(s_strip, 0, r, g, b);
+        led_strip_refresh(s_strip);
+    }
+}

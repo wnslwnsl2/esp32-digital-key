@@ -4,6 +4,7 @@
 #include <string.h>
 #include "esp_log.h"
 #include "esp_random.h"
+#include "host/ble_gap.h"
 /* Allow direct access to mbedtls_ecp_keypair members (grp, Q) */
 #define MBEDTLS_ALLOW_PRIVATE_ACCESS
 #include "mbedtls/pk.h"
@@ -74,6 +75,17 @@ bool DkAuth_IsOwner(dk_conn_state_t *conn)
 {
     if (!conn || conn->auth_state != DK_AUTH_OK) return false;
     return DkKeystore_IsOwner(conn->key_id);
+}
+
+void DkAuth_DisconnectAll(void)
+{
+    for (int i = 0; i < DK_MAX_CONNECTIONS; i++) {
+        if (s_conns[i].conn_handle != 0xFFFF) {
+            ESP_LOGI(TAG, "terminating conn=%d", s_conns[i].conn_handle);
+            ble_gap_terminate(s_conns[i].conn_handle,
+                              BLE_ERR_REM_USER_CONN_TERM);
+        }
+    }
 }
 
 /* ── Challenge generation ────────────────────────────────── */

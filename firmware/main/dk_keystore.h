@@ -33,5 +33,8 @@ esp_err_t DkKeystore_GetPubkey(const char *key_id,
 /** Check if key_id is the first registered key (owner). */
 bool DkKeystore_IsOwner(const char *key_id);
 
+/** Erase all keys (factory reset). */
+esp_err_t DkKeystore_EraseAll(void);
+
 uint8_t DkKeystore_RegisteredCount(void);
 uint8_t DkKeystore_PendingCount(void);

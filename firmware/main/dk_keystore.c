@@ -147,6 +147,23 @@ bool DkKeystore_IsOwner(const char *key_id)
     return (memcmp(s_keys[0].key_id, key_id, 16) == 0 && !s_keys[0].pending);
 }
 
+esp_err_t DkKeystore_EraseAll(void)
+{
+    nvs_handle_t h;
+    esp_err_t ret = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h);
+    if (ret != ESP_OK) return ret;
+
+    ret = nvs_erase_all(h);
+    nvs_commit(h);
+    nvs_close(h);
+
+    s_key_count = 0;
+    memset(s_keys, 0, sizeof(s_keys));
+
+    ESP_LOGW(TAG, "all keys erased");
+    return ret;
+}
+
 uint8_t DkKeystore_RegisteredCount(void)
 {
     uint8_t n = 0;
