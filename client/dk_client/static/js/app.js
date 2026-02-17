@@ -77,6 +77,9 @@ function handleMessage(msg) {
       if (msg.data.devices && msg.data.devices.length > 0) {
         updateDeviceList(msg.data.devices);
       }
+      if (msg.data.scanning) {
+        setScanState(true);
+      }
       appendLog('INFO', `Client ID: ${clientId}`);
       break;
 
@@ -98,6 +101,10 @@ function handleMessage(msg) {
 
     case 'auth_result':
       // Auth is shown via progress steps, no separate handling needed
+      break;
+
+    case 'scan_state':
+      setScanState(msg.data.scanning);
       break;
 
     case 'command_result':
@@ -142,14 +149,12 @@ function initEventListeners() {
 
 // Scan
 function scanDevices() {
-  elements.btnScan.disabled = true;
-  elements.btnScan.textContent = 'Scanning...';
   sendWs('scan');
+}
 
-  setTimeout(() => {
-    elements.btnScan.disabled = false;
-    elements.btnScan.textContent = 'Scan';
-  }, 10000);
+function setScanState(scanning) {
+  elements.btnScan.disabled = scanning;
+  elements.btnScan.textContent = scanning ? 'Scanning...' : 'Scan';
 }
 
 // Connect / Disconnect
@@ -298,9 +303,6 @@ function updateDeviceList(deviceList, showLog = false) {
     elements.deviceSelect.innerHTML = '<option value="">Select a device</option>';
     elements.deviceSelect.disabled = true;
   }
-
-  elements.btnScan.disabled = false;
-  elements.btnScan.textContent = 'Scan';
 
   if (showLog) {
     appendLog('INFO', `${deviceList.length} device(s) found`);

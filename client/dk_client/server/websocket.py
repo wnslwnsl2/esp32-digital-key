@@ -125,6 +125,7 @@ async def websocket_endpoint(websocket: WebSocket):
             "data": {
                 "client_id": client_id,
                 "devices": scanned_devices,
+                "scanning": _scanning,
             },
         })
         await broadcast_status()
@@ -159,6 +160,36 @@ async def _ensure_status_subscription():
             pass
 
 
+_scanning = False
+
+
+async def do_scan():
+    """Run BLE scan and broadcast results."""
+    global scanned_devices, _scanning
+    if _scanning:
+        return
+    _scanning = True
+    await broadcast({"type": "scan_state", "data": {"scanning": True}})
+    await broadcast_log("INFO", "Scanning for DK devices...")
+    try:
+        devices = await scan(timeout=5.0)
+        scanned_devices = [
+            {"name": d.name, "address": d.address, "rssi": d.rssi}
+            for d in devices
+        ]
+        await broadcast({
+            "type": "scan_result",
+            "data": scanned_devices,
+        })
+        await broadcast_log("INFO", f"Scan complete: {len(devices)} device(s) found")
+    except Exception as e:
+        logger.exception("BLE scan failed")
+        await broadcast_log("ERROR", f"Scan failed: {e}")
+    finally:
+        _scanning = False
+        await broadcast({"type": "scan_state", "data": {"scanning": False}})
+
+
 async def handle_ws_message(client_id: str, msg: dict):
     global ble_client, scanned_devices, last_status
 
@@ -166,21 +197,7 @@ async def handle_ws_message(client_id: str, msg: dict):
     data = msg.get("data", {})
 
     if msg_type == "scan":
-        await broadcast_log("INFO", "Scanning for DK devices...")
-        try:
-            devices = await scan(timeout=5.0)
-            scanned_devices = [
-                {"name": d.name, "address": d.address, "rssi": d.rssi}
-                for d in devices
-            ]
-            await broadcast({
-                "type": "scan_result",
-                "data": scanned_devices,
-            })
-            await broadcast_log("INFO", f"Scan complete: {len(devices)} device(s) found")
-        except Exception as e:
-            logger.exception("BLE scan failed")
-            await broadcast_log("ERROR", f"Scan failed: {e}")
+        await do_scan()
 
     elif msg_type == "connect":
         address = data.get("address")
@@ -207,6 +224,14 @@ async def handle_ws_message(client_id: str, msg: dict):
         await _key_mgmt_command(client_id, data, KEY_MGMT_DELETE, "delete")
 
 
+async def _on_ble_disconnect():
+    """Called when the remote device terminates the BLE connection."""
+    global last_status
+    last_status = None
+    await broadcast_log("WARNING", "Device disconnected (remote)")
+    await broadcast_status()
+
+
 async def _broadcast_progress(step: str, status: str, detail: str = ""):
     """Broadcast connect/auth progress to all clients."""
     await broadcast({
@@ -226,6 +251,9 @@ async def _connect_and_auth(client_id: str, address: str):
             await ble_client.disconnect()
 
         ble_client = DkBleClient(address)
+        ble_client.set_on_disconnect(
+            lambda: asyncio.ensure_future(_on_ble_disconnect())
+        )
         success = await ble_client.connect()
         if not success:
             await _broadcast_progress("connect", "failed")

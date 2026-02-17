@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from dk_client.server.websocket import router as ws_router, status_update_loop
+from dk_client.server.websocket import router as ws_router, status_update_loop, do_scan
 
 
 class NoCacheMiddleware(BaseHTTPMiddleware):
@@ -35,6 +35,7 @@ async def lifespan(app: FastAPI):
 
     print("Digital Key Web UI starting...")
     _status_task = asyncio.create_task(status_update_loop())
+    asyncio.create_task(do_scan())
 
     yield
 

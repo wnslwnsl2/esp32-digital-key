@@ -57,15 +57,29 @@ class DkBleClient:
     def __init__(self, address: str):
         self.address = address
         self.client: Optional[BleakClient] = None
+        self._on_disconnect_cb: Optional[Callable[[], None]] = None
+
+    def set_on_disconnect(self, callback: Callable[[], None]):
+        """Register callback invoked when the remote device disconnects."""
+        self._on_disconnect_cb = callback
+
+    def _handle_disconnect(self, client: BleakClient):
+        logger.info("device disconnected (remote)")
+        if self._on_disconnect_cb:
+            self._on_disconnect_cb()
 
     async def connect(self) -> bool:
-        self.client = BleakClient(self.address)
+        self.client = BleakClient(
+            self.address, disconnected_callback=self._handle_disconnect,
+        )
         try:
             await self.client.connect()
         except Exception as e:
             logger.warning(f"connect failed ({e}), clearing BlueZ cache and retrying...")
             _bluez_remove(self.address)
-            self.client = BleakClient(self.address)
+            self.client = BleakClient(
+                self.address, disconnected_callback=self._handle_disconnect,
+            )
             try:
                 await self.client.connect()
             except Exception as e2:
