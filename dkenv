@@ -1,0 +1,14 @@
+#!/bin/bash
+# dkenv - Digital Key ESP-IDF Docker development environment
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+ENV_NAME="dkenv"
+DOCKER_IMAGE="espressif/idf:v5.4.1"
+CONTAINER_NAME="dkenv-dev"
+COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
+SHOW_DEVICES="true"
+
+source /home/chandlerkim/repositories/firmware/command/lib/docker.sh
+check_docker
+env_run "$1"

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "esp_err.h"
+#include "host/ble_gap.h"
 #include "host/ble_gatt.h"
 
 /**

@@ -1,5 +1,6 @@
 #!/bin/bash
 # dkidf - Digital Key ESP-IDF build/flash/monitor
+# Run inside dkenv container (ESP-IDF Docker environment)
 # Usage: dkidf [commands...] [options]
 # Examples:
 #   dkidf build
@@ -8,8 +9,11 @@
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FIRMWARE_DIR="$SCRIPT_DIR/firmware"
+# ESP-IDF environment
+source /opt/esp/idf/export.sh > /dev/null 2>&1
+
+PROJECT_DIR="/project"
+FIRMWARE_DIR="$PROJECT_DIR/firmware"
 BUILD_DIR="$FIRMWARE_DIR/build"
 KEYS_DIR="$FIRMWARE_DIR/keys"
 SIGNING_KEY="$KEYS_DIR/secure_boot_signing_key.pem"

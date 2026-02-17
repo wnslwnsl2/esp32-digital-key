@@ -4,6 +4,8 @@
 #include <string.h>
 #include "esp_log.h"
 #include "esp_random.h"
+/* Allow direct access to mbedtls_ecp_keypair members (grp, Q) */
+#define MBEDTLS_ALLOW_PRIVATE_ACCESS
 #include "mbedtls/pk.h"
 #include "mbedtls/ecp.h"
 #include "mbedtls/sha256.h"

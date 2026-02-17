@@ -1,0 +1,15 @@
+services:
+  idf:
+    image: espressif/idf:v5.4.1
+    container_name: dkenv-dev
+    working_dir: /project
+    volumes:
+      - .:/project
+      - ../firmware/v1/keys:/project/firmware/keys:ro
+      - /dev:/dev
+    privileged: true
+    environment:
+      - IDF_CCACHE_ENABLE=1
+    stdin_open: true
+    tty: true
+    command: bash -c "ln -sf /project/dkidf /usr/local/bin/ && exec bash"
