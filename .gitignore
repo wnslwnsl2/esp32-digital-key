@@ -3,6 +3,7 @@ firmware/build/
 firmware/sdkconfig
 firmware/sdkconfig.old
 firmware/keys
+firmware/managed_components/
 
 # Python
 __pycache__/
