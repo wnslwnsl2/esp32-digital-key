@@ -1,0 +1,240 @@
+#!/bin/bash
+# dkidf - Digital Key ESP-IDF build/flash/monitor
+# Usage: dkidf [commands...] [options]
+# Examples:
+#   dkidf build
+#   dkidf build flash monitor
+#   dkidf flash --full -p /dev/ttyACM0
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FIRMWARE_DIR="$SCRIPT_DIR/firmware"
+BUILD_DIR="$FIRMWARE_DIR/build"
+KEYS_DIR="$FIRMWARE_DIR/keys"
+SIGNING_KEY="$KEYS_DIR/secure_boot_signing_key.pem"
+PARTITIONS_CSV="$FIRMWARE_DIR/partitions.csv"
+
+# Flash defaults
+FLASH_BAUD=460800
+FLASH_SIZE="8MB"
+FLASH_MODE="dio"
+FLASH_FREQ="80m"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+# Parse arguments
+COMMANDS=()
+PORT=""
+CLEAN=false
+FULL_FLASH=false
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help)
+                show_help; exit 0 ;;
+            build|flash|monitor|fullclean)
+                COMMANDS+=("$1"); shift ;;
+            --clean)
+                CLEAN=true; shift ;;
+            --full)
+                FULL_FLASH=true; shift ;;
+            -p|--port)
+                PORT="$2"; shift 2 ;;
+            *)
+                echo -e "${RED}Unknown option: $1${NC}"; exit 1 ;;
+        esac
+    done
+}
+
+detect_port() {
+    if [[ -z "$PORT" ]]; then
+        PORT=$(ls /dev/ttyACM* /dev/ttyUSB* 2>/dev/null | head -1)
+        if [[ -z "$PORT" ]]; then
+            echo -e "${RED}No serial device found${NC}"
+            exit 1
+        fi
+        echo -e "${BLUE}Port:${NC} $PORT"
+    fi
+}
+
+cmd_build() {
+    echo -e "${BLUE}Building digital-key firmware...${NC}"
+
+    if [[ "$CLEAN" == true ]]; then
+        echo "Clean build..."
+        idf.py -C "$FIRMWARE_DIR" fullclean
+    fi
+
+    idf.py -C "$FIRMWARE_DIR" build || exit 1
+
+    # Sign partition table
+    echo ""
+    echo -e "${BLUE}Signing partition table...${NC}"
+    python3 "$FIRMWARE_DIR/tools/sign_partition_table.py" \
+        -i "$BUILD_DIR/partition_table/partition-table.bin" \
+        -k "$SIGNING_KEY" \
+        -o "$BUILD_DIR/partition_table" || exit 1
+
+    # Print result
+    local app_bin="$BUILD_DIR/digital-key.bin"
+    if [[ -f "$app_bin" ]]; then
+        local size=$(du -h "$app_bin" | cut -f1)
+        echo ""
+        echo -e "${GREEN}Build complete:${NC} $app_bin ($size)"
+    fi
+}
+
+cmd_flash() {
+    detect_port
+
+    # Parse flasher_args.json for offsets
+    local flasher_args="$BUILD_DIR/flasher_args.json"
+    if [[ ! -f "$flasher_args" ]]; then
+        echo -e "${RED}flasher_args.json not found. Run 'dkidf build' first.${NC}"
+        exit 1
+    fi
+
+    local app_offset=$(python3 -c "import json; d=json.load(open('$flasher_args')); print(d['app']['offset'])")
+    local app_file=$(python3 -c "import json; d=json.load(open('$flasher_args')); print(d['app']['file'])")
+    local pt_offset=$(python3 -c "import json; d=json.load(open('$flasher_args')); print(d['partition-table']['offset'])")
+    local pt_file=$(python3 -c "import json; d=json.load(open('$flasher_args')); print(d['partition-table']['file'])")
+
+    local app_bin="$BUILD_DIR/$app_file"
+    local pt_bin="$BUILD_DIR/$pt_file"
+    local bootloader="$BUILD_DIR/bootloader/bootloader.bin"
+
+    # Verify files exist
+    if [[ ! -f "$app_bin" ]]; then
+        echo -e "${RED}App binary not found: $app_bin${NC}"
+        exit 1
+    fi
+
+    if [[ "$FULL_FLASH" == true ]]; then
+        echo -e "${BLUE}Full flash:${NC} bootloader + partition table + app -> $PORT"
+    else
+        echo -e "${BLUE}Flash:${NC} app -> $PORT"
+    fi
+
+    # Erase OTA data partition before flashing
+    local ota_offset=""
+    local ota_size=""
+    if [[ -f "$PARTITIONS_CSV" ]]; then
+        while IFS=',' read -r name type subtype offset size || [[ -n "$name" ]]; do
+            [[ "$name" =~ ^#.*$ || -z "$name" ]] && continue
+            subtype=$(echo "$subtype" | xargs)
+            if [[ "$subtype" == "ota" ]]; then
+                ota_offset=$(echo "$offset" | xargs)
+                ota_size=$(echo "$size" | xargs)
+                break
+            fi
+        done < "$PARTITIONS_CSV"
+    fi
+
+    if [[ -n "$ota_offset" && -n "$ota_size" ]]; then
+        local ota_size_dec=$((ota_size))
+        local erase_file=$(mktemp)
+        trap "rm -f $erase_file" EXIT
+        dd if=/dev/zero bs=1 count=$ota_size_dec 2>/dev/null | tr '\000' '\377' > "$erase_file"
+
+        echo -e "${BLUE}Erasing OTA data partition...${NC}"
+        python -m esptool \
+            --chip esp32s3 \
+            --port "$PORT" \
+            --baud "$FLASH_BAUD" \
+            --no-stub \
+            write_flash --encrypt --force \
+            "$ota_offset" "$erase_file" || echo -e "${YELLOW}OTA erase failed, continuing...${NC}"
+    fi
+
+    # Build esptool command
+    local cmd=(
+        python -m esptool
+        --chip esp32s3
+        --port "$PORT"
+        --baud "$FLASH_BAUD"
+        --no-stub
+        write_flash
+        --encrypt
+        --force
+        --flash_mode "$FLASH_MODE"
+        --flash_size "$FLASH_SIZE"
+        --flash_freq "$FLASH_FREQ"
+    )
+
+    if [[ "$FULL_FLASH" == true ]]; then
+        cmd+=("0x0" "$bootloader")
+        cmd+=("$pt_offset" "$pt_bin")
+    fi
+    cmd+=("$app_offset" "$app_bin")
+
+    echo -e "${BLUE}Flashing (encrypted)...${NC}"
+    if "${cmd[@]}"; then
+        echo ""
+        echo -e "${GREEN}Flash complete!${NC}"
+    else
+        echo ""
+        echo -e "${RED}Flash failed${NC}"
+        exit 1
+    fi
+}
+
+cmd_monitor() {
+    detect_port
+    echo -e "${BLUE}Monitor:${NC} $PORT (Ctrl+] to exit)"
+    idf.py -C "$FIRMWARE_DIR" -p "$PORT" monitor
+}
+
+cmd_fullclean() {
+    echo -e "${BLUE}Cleaning build directory...${NC}"
+    rm -rf "$BUILD_DIR"
+    echo -e "${GREEN}Done${NC}"
+}
+
+show_help() {
+    cat <<EOF
+Usage: dkidf [command...] [options]
+
+Commands (chainable):
+  build        Build firmware + sign partition table
+  flash        Encrypted flash to device (app only by default)
+  monitor      Serial monitor (USB Serial JTAG)
+  fullclean    Remove build directory
+
+Options:
+  --clean           Clean build before building
+  --full            Flash bootloader + partition table + app
+  -p, --port PORT   Serial port (default: auto-detect /dev/ttyACM* or /dev/ttyUSB*)
+  -h, --help        Show this help
+
+Examples:
+  dkidf build
+  dkidf build flash monitor
+  dkidf flash -p /dev/ttyACM0
+  dkidf flash --full
+  dkidf build --clean flash monitor
+EOF
+}
+
+# Main
+parse_args "$@"
+
+if [[ ${#COMMANDS[@]} -eq 0 ]]; then
+    show_help
+    exit 1
+fi
+
+for cmd in "${COMMANDS[@]}"; do
+    case "$cmd" in
+        build)     cmd_build ;;
+        flash)     cmd_flash ;;
+        monitor)   cmd_monitor ;;
+        fullclean) cmd_fullclean ;;
+    esac
+done

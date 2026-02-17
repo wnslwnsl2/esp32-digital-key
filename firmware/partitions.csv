@@ -1,0 +1,15 @@
+# ESP32-S3 with 8MB flash
+# Shared partition layout (same as v1)
+#
+# Memory Layout:
+#   0x00000 - 0x0B000: Bootloader (~44KB, signed)
+#   0x10000 - 0x12000: Partition table (8KB, signed)
+#   0x11000 - 0x17000: NVS (24KB)
+# Name,     Type, SubType, Offset,   Size
+nvs,        data, nvs,     0x11000,  0x6000
+otadata,    data, ota,     0x17000,  0x2000
+phy_init,   data, phy,     0x19000,  0x1000
+certs,      data, 0x40,    0x1C000,  0x4000
+factory,    app,  factory, 0x20000,  2M
+ota_0,      app,  ota_0,   0x220000, 2M
+ota_1,      app,  ota_1,   0x420000, 2M
