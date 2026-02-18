@@ -93,10 +93,6 @@ def start_reg_server():
 
     from dk_client.server.reg_app import app
 
-    threading.Thread(
-        target=_open_url, args=(f"http://localhost:{REG_PORT}",), daemon=True,
-    ).start()
-
     print(f"Digital Key Server running on http://{REG_HOST}:{REG_PORT}")
     uvicorn.run(
         app,
