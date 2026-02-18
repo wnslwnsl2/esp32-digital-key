@@ -157,3 +157,41 @@ async def api_logout(request: Request):
     resp = JSONResponse({"ok": True})
     resp.delete_cookie(SESSION_COOKIE)
     return resp
+
+
+@app.get("/api/accounts")
+async def api_accounts():
+    """Proxy accounts list from dk-server."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{DK_SERVER_URL}/api/accounts")
+            return JSONResponse(resp.json(), status_code=resp.status_code)
+    except Exception:
+        return JSONResponse([], status_code=200)
+
+
+@app.post("/api/share")
+async def api_share(request: Request):
+    """Share vehicle — proxy to dk-server."""
+    token = request.cookies.get(SESSION_COOKIE)
+    account = _sessions.get(token, "") if token else ""
+    body = await request.json()
+    vehicle_id = body.get("vehicle_id", "")
+    target_account = body.get("account", "")
+    role = body.get("role", "family")
+    expires_at = body.get("expires_at", "")
+
+    if not vehicle_id or not target_account:
+        return JSONResponse({"error": "vehicle_id and account required"}, status_code=400)
+    if target_account == account:
+        return JSONResponse({"error": "Cannot share with yourself"}, status_code=400)
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(
+                f"{DK_SERVER_URL}/api/vehicles/{vehicle_id}/share",
+                json={"account": target_account, "role": role, "expires_at": expires_at},
+            )
+            return JSONResponse(resp.json(), status_code=resp.status_code)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=502)

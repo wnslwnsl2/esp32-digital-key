@@ -6,6 +6,9 @@ let ws = null;
 let clientId = null;
 let connected = false;
 let stepStartTimes = {};
+let currentVehicleId = null;
+let currentAccount = '';
+let isOwner = false;
 
 const STEP_IDS = ['connect', 'auth', 'device_auth', 'subscribe'];
 const STEP_EL_KEYS = ['stepConnect', 'stepAuth', 'stepDeviceAuth', 'stepSubscribe'];
@@ -156,24 +159,32 @@ function handleMessage(msg) {
 // --- Account & Vehicle Info ---
 
 function displayInfo(data) {
-  el.infoAccount.textContent = data.account || '-';
+  currentAccount = data.account || '';
+  el.infoAccount.textContent = currentAccount || '-';
 
   const vehicles = data.vehicles || [];
   if (vehicles.length === 0) {
     el.infoVehicle.textContent = 'None';
     el.infoRole.textContent = '-';
+    currentVehicleId = null;
+    isOwner = false;
     return;
   }
 
   // Show first vehicle with user's key
   const v = vehicles[0];
+  currentVehicleId = v.id;
   el.infoVehicle.textContent = v.name || v.ble_address || '-';
 
   // Find user's role in this vehicle
-  const account = data.account || '';
   const keys = v.keys || [];
-  const myKey = keys.find(k => k.account === account);
-  el.infoRole.textContent = myKey ? myKey.role : '-';
+  const myKey = keys.find(k => k.account === currentAccount);
+  const role = myKey ? myKey.role : '-';
+  el.infoRole.textContent = role;
+  isOwner = (role === 'owner');
+
+  // Show share button only for owners
+  document.getElementById('share-row').style.display = isOwner ? '' : 'none';
 }
 
 // --- Auto-scan ---
@@ -313,6 +324,76 @@ async function logout() {
   sessionStorage.removeItem('dk_user');
   window.location.href = '/login';
 }
+
+// --- Share ---
+
+async function showShareModal() {
+  if (!currentVehicleId) return;
+  const modal = document.getElementById('share-modal');
+  const sel = document.getElementById('share-account');
+  sel.innerHTML = '<option value="">Loading...</option>';
+  modal.classList.add('active');
+
+  try {
+    const res = await fetch('/api/accounts');
+    const accounts = await res.json();
+    sel.innerHTML = accounts
+      .filter(a => a.name !== currentAccount)
+      .map(a => `<option value="${esc(a.name)}">${esc(a.name)}</option>`)
+      .join('');
+    if (!sel.innerHTML) sel.innerHTML = '<option value="">No other accounts</option>';
+  } catch {
+    sel.innerHTML = '<option value="">Failed to load</option>';
+  }
+}
+
+function hideShareModal() {
+  document.getElementById('share-modal').classList.remove('active');
+}
+
+function toggleShareExpiry() {
+  const role = document.getElementById('share-role').value;
+  document.getElementById('share-expiry-group').style.display = role === 'guest' ? '' : 'none';
+}
+
+async function submitShare() {
+  const account = document.getElementById('share-account').value;
+  const role = document.getElementById('share-role').value;
+  const expires_at = document.getElementById('share-expires').value || '';
+
+  if (!account) return alert('Select an account');
+  if (!currentVehicleId) return;
+
+  try {
+    const res = await fetch('/api/share', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ vehicle_id: currentVehicleId, account, role, expires_at }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      appendLog('INFO', `Shared vehicle with ${account} (${role})`);
+      hideShareModal();
+    } else {
+      alert(data.error || 'Share failed');
+    }
+  } catch (e) {
+    alert('Share failed: ' + e.message);
+  }
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// Close modal on overlay click
+document.querySelectorAll('.modal-overlay').forEach(el => {
+  el.addEventListener('click', (e) => {
+    if (e.target === el) el.classList.remove('active');
+  });
+});
 
 // --- Formatters ---
 

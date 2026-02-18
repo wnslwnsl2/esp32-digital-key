@@ -291,33 +291,6 @@
     </div>
   </div>
 
-  <!-- Share Vehicle Modal -->
-  <div class="modal-overlay" id="share-modal">
-    <div class="modal">
-      <h3>Share Vehicle</h3>
-      <input type="hidden" id="share-vehicle-id">
-      <div class="form-group">
-        <label>Account</label>
-        <select id="share-account"></select>
-      </div>
-      <div class="form-group">
-        <label>Role</label>
-        <select id="share-role" onchange="toggleShareExpiry()">
-          <option value="family" selected>Family</option>
-          <option value="guest">Guest</option>
-        </select>
-      </div>
-      <div class="form-group" id="share-expiry-group" style="display:none">
-        <label>Expires at</label>
-        <input type="datetime-local" id="share-expires">
-      </div>
-      <div class="modal-actions">
-        <button class="btn-sm btn-outline" onclick="hideModal('share-modal')">Cancel</button>
-        <button class="btn-sm btn-primary" onclick="shareVehicle()">Share</button>
-      </div>
-    </div>
-  </div>
-
   <!-- Add Account Modal -->
   <div class="modal-overlay" id="add-account-modal">
     <div class="modal">

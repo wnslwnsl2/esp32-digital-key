@@ -27,6 +27,10 @@
         <span class="info-label">Role</span>
         <span class="info-value" id="info-role">-</span>
       </div>
+      <div class="info-row" id="share-row" style="display: none;">
+        <span class="info-label">Key Sharing</span>
+        <button class="btn btn-sm btn-primary" onclick="showShareModal()">Share</button>
+      </div>
     </div>
 
     <!-- Scanning -->
@@ -138,6 +142,32 @@
     <div class="card">
       <h2>Log</h2>
       <div id="log-container"></div>
+    </div>
+  </div>
+
+  <!-- Share Modal -->
+  <div class="modal-overlay" id="share-modal">
+    <div class="modal">
+      <h3>Share Vehicle</h3>
+      <div class="form-group">
+        <label>Account</label>
+        <select id="share-account"></select>
+      </div>
+      <div class="form-group">
+        <label>Role</label>
+        <select id="share-role" onchange="toggleShareExpiry()">
+          <option value="family" selected>Family</option>
+          <option value="guest">Guest</option>
+        </select>
+      </div>
+      <div class="form-group" id="share-expiry-group" style="display:none">
+        <label>Expires at</label>
+        <input type="datetime-local" id="share-expires">
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-sm" onclick="hideShareModal()">Cancel</button>
+        <button class="btn btn-sm btn-primary" onclick="submitShare()">Share</button>
+      </div>
     </div>
   </div>
 

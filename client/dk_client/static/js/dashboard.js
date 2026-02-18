@@ -39,7 +39,6 @@ function renderVehicles(vehicles) {
         </div>
         <div>
           <button class="btn-icon" title="Add key" onclick="showAddKey('${v.id}')">🔑</button>
-          <button class="btn-icon" title="Share" onclick="showShare('${v.id}')">👥</button>
           <button class="btn-icon" title="Delete vehicle" onclick="removeVehicle('${v.id}','${esc(v.name)}')">✕</button>
         </div>
       </div>
@@ -183,11 +182,6 @@ function toggleExpiry() {
   document.getElementById('key-expiry-group').style.display = role === 'guest' ? '' : 'none';
 }
 
-function toggleShareExpiry() {
-  const role = document.getElementById('share-role').value;
-  document.getElementById('share-expiry-group').style.display = role === 'guest' ? '' : 'none';
-}
-
 function showAddKey(vehicleId) {
   document.getElementById('key-vehicle-id').value = vehicleId;
   document.getElementById('key-role').value = 'owner';
@@ -212,29 +206,6 @@ async function addKey() {
 async function removeKey(vehicleId, keyId) {
   if (!confirm(`Remove key "${keyId}"?`)) return;
   await api('DELETE', `/api/vehicles/${vehicleId}/keys/${keyId}`);
-  loadVehicles();
-}
-
-// --- Share ---
-
-function showShare(vehicleId) {
-  document.getElementById('share-vehicle-id').value = vehicleId;
-  document.getElementById('share-role').value = 'family';
-  document.getElementById('share-expires').value = '';
-  toggleShareExpiry();
-  _populateAccountSelect('share-account');
-  document.getElementById('share-modal').classList.add('active');
-}
-
-async function shareVehicle() {
-  const vehicleId = document.getElementById('share-vehicle-id').value;
-  const account = document.getElementById('share-account').value;
-  const role = document.getElementById('share-role').value;
-  const expires_at = document.getElementById('share-expires').value || '';
-
-  if (!account) return alert('Select an account');
-  await api('POST', `/api/vehicles/${vehicleId}/share`, { account, role, expires_at });
-  hideModal('share-modal');
   loadVehicles();
 }
 
