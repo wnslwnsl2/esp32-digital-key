@@ -16,6 +16,8 @@
 #define DK_CHR_LOCK_CMD_UUID      0x05
 #define DK_CHR_SYSTEM_STATUS_UUID 0x06
 #define DK_CHR_KEY_MGMT_UUID      0x07
+#define DK_CHR_DEVICE_PUBKEY_UUID 0x08
+#define DK_CHR_DEVICE_AUTH_UUID   0x09
 
 /** Get the GATT service definition table (null-terminated). */
 const struct ble_gatt_svc_def *DkService_GetDefs(void);

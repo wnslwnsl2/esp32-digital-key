@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Digital Key — Dashboard</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <style>
+    .dashboard-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+    .dashboard-header h1 { font-size: 22px; font-weight: 600; }
+    .btn-sm {
+      padding: 8px 16px;
+      font-size: 14px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-outline {
+      background: transparent;
+      border: 1px solid var(--color-border);
+      color: var(--color-text-secondary);
+    }
+    .btn-outline:hover { background: var(--color-bg); }
+
+    /* Vehicle cards */
+    .vehicle-card {
+      border: 1px solid var(--color-border);
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 12px;
+      background: var(--color-card);
+    }
+    .vehicle-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .vehicle-header h3 { font-size: 16px; font-weight: 600; }
+    .vehicle-addr {
+      font-family: monospace;
+      font-size: 13px;
+      color: var(--color-text-secondary);
+    }
+    .vehicle-date {
+      font-size: 12px;
+      color: var(--color-text-secondary);
+    }
+    .btn-icon {
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 16px;
+      color: var(--color-text-secondary);
+      padding: 4px 8px;
+      border-radius: 4px;
+    }
+    .btn-icon:hover { background: #fee2e2; color: var(--color-danger); }
+
+    /* Key list */
+    .key-list { margin-top: 8px; }
+    .key-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 10px;
+      background: var(--color-bg);
+      border-radius: 6px;
+      margin-bottom: 4px;
+      font-size: 13px;
+    }
+    .key-info { display: flex; gap: 12px; align-items: center; }
+    .key-id { font-family: monospace; font-weight: 500; }
+    .key-role {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-weight: 500;
+    }
+    .key-role.owner { background: #dbeafe; color: #1d4ed8; }
+    .key-role.user { background: #e5e7eb; color: #374151; }
+    .key-pubkey {
+      font-family: monospace;
+      font-size: 11px;
+      color: var(--color-text-secondary);
+    }
+
+    /* Add forms */
+    .add-form {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: flex-end;
+    }
+    .add-form input, .add-form select {
+      padding: 8px 12px;
+      border: 1px solid var(--color-border);
+      border-radius: 6px;
+      font-size: 14px;
+    }
+    .add-form input { min-width: 0; flex: 1; }
+    .add-form select { min-width: 100px; }
+
+    /* Event table */
+    .event-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .event-table th {
+      text-align: left;
+      padding: 8px 10px;
+      font-size: 12px;
+      color: var(--color-text-secondary);
+      border-bottom: 2px solid var(--color-border);
+    }
+    .event-table td {
+      padding: 6px 10px;
+      border-bottom: 1px solid var(--color-border);
+    }
+    .event-table tr:last-child td { border-bottom: none; }
+    .event-time { font-family: monospace; font-size: 12px; white-space: nowrap; }
+    .event-type {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-weight: 500;
+    }
+    .event-type.auth { background: #dbeafe; color: #1d4ed8; }
+    .event-type.unlock { background: #d1fae5; color: #065f46; }
+    .event-type.lock { background: #fee2e2; color: #991b1b; }
+    .event-type.provision { background: #fef3c7; color: #92400e; }
+    .event-addr {
+      font-family: monospace;
+      font-size: 12px;
+    }
+
+    /* Section spacing */
+    .section-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .section-header h2 { margin-bottom: 0; }
+
+    /* Empty state */
+    .empty-state {
+      text-align: center;
+      padding: 24px;
+      color: var(--color-text-secondary);
+      font-size: 14px;
+    }
+
+    /* Modal overlay */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.4);
+      justify-content: center;
+      align-items: center;
+      z-index: 100;
+    }
+    .modal-overlay.active { display: flex; }
+    .modal {
+      background: var(--color-card);
+      border-radius: 12px;
+      padding: 24px;
+      width: 90%;
+      max-width: 440px;
+    }
+    .modal h3 { font-size: 16px; margin-bottom: 16px; }
+    .modal .form-group { margin-bottom: 12px; }
+    .modal .form-group input, .modal .form-group select {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid var(--color-border);
+      border-radius: 8px;
+      font-size: 14px;
+    }
+    .modal-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      margin-top: 16px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="dashboard-header">
+      <h1>Digital Key Server</h1>
+      <button class="btn-sm btn-outline" onclick="logout()">Logout</button>
+    </div>
+
+    <!-- Vehicles Section -->
+    <div class="card">
+      <div class="section-header">
+        <h2>Vehicles</h2>
+        <button class="btn-sm btn-primary" onclick="showAddVehicle()">+ Add</button>
+      </div>
+      <div id="vehicles-container">
+        <div class="empty-state">No vehicles registered</div>
+      </div>
+    </div>
+
+    <!-- Key Binding Modal Trigger (shown per vehicle) -->
+
+    <!-- Events Section -->
+    <div class="card">
+      <div class="section-header">
+        <h2>Event Log</h2>
+        <span id="event-refresh-indicator" style="font-size:12px;color:var(--color-text-secondary)">auto-refresh: 5s</span>
+      </div>
+      <div id="events-container">
+        <div class="empty-state">No events yet</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Vehicle Modal -->
+  <div class="modal-overlay" id="add-vehicle-modal">
+    <div class="modal">
+      <h3>Register Vehicle</h3>
+      <div class="form-group">
+        <label>Name</label>
+        <input type="text" id="vehicle-name" placeholder="My Car">
+      </div>
+      <div class="form-group">
+        <label>BLE Address</label>
+        <input type="text" id="vehicle-addr" placeholder="AA:BB:CC:DD:EE:FF">
+      </div>
+      <div class="modal-actions">
+        <button class="btn-sm btn-outline" onclick="hideModal('add-vehicle-modal')">Cancel</button>
+        <button class="btn-sm btn-primary" onclick="addVehicle()">Register</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Key Modal -->
+  <div class="modal-overlay" id="add-key-modal">
+    <div class="modal">
+      <h3>Bind Key</h3>
+      <input type="hidden" id="key-vehicle-id">
+      <div class="form-group">
+        <label>Key ID</label>
+        <select id="key-id-select">
+          <option value="">Select a local key...</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Or enter Key ID manually</label>
+        <input type="text" id="key-id-manual" placeholder="16-char hex">
+      </div>
+      <div class="form-group">
+        <label>Public Key (hex, optional)</label>
+        <input type="text" id="key-pubkey" placeholder="04ab...">
+      </div>
+      <div class="form-group">
+        <label>Role</label>
+        <select id="key-role">
+          <option value="owner">Owner</option>
+          <option value="user" selected>User</option>
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-sm btn-outline" onclick="hideModal('add-key-modal')">Cancel</button>
+        <button class="btn-sm btn-primary" onclick="addKey()">Bind</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/dashboard.js"></script>
+</body>
+</html>

@@ -3,20 +3,104 @@
 import asyncio
 import json
 import logging
+import os
 import uuid
 from datetime import datetime
 from typing import Optional
 
+import httpx
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from dk_client.ble import DkBleClient, scan
 
 logger = logging.getLogger(__name__)
-from dk_client.crypto import load_or_create_key, get_public_key_bytes, sign_challenge
+
+DK_SERVER_URL = os.environ.get("DK_SERVER_URL", "http://localhost:8100")
+
+
+async def report_event(vehicle_addr: str, key_id: str, event: str, detail: str = ""):
+    """Fire-and-forget event report to dk-server. Failures are silently ignored."""
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            await client.post(f"{DK_SERVER_URL}/api/events", json={
+                "vehicle": vehicle_addr,
+                "key_id": key_id,
+                "event": event,
+                "detail": detail,
+            })
+    except Exception:
+        pass
+
+
+async def fetch_registered_vehicles() -> list[dict]:
+    """Fetch registered vehicles from dk-server. Returns empty list on failure."""
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(f"{DK_SERVER_URL}/api/vehicles")
+            if resp.status_code == 200:
+                return resp.json()
+    except Exception:
+        pass
+    return []
+
+
+def _find_key_for_vehicle(address: str, vehicles: list[dict]) -> str | None:
+    """Find a locally-available key_id bound to the vehicle with the given BLE address."""
+    from dk_client.crypto import get_key_dir
+
+    key_dir = get_key_dir()
+    addr_upper = address.upper()
+
+    for v in vehicles:
+        if v.get("ble_address", "").upper() == addr_upper:
+            for k in v.get("keys", []):
+                kid = k.get("key_id", "")
+                if kid and (key_dir / f"{kid}.pem").exists():
+                    return kid
+    return None
+
+
+def _get_device_pubkey(address: str, vehicles: list[dict]) -> str | None:
+    """Look up stored device_public_key for a vehicle by BLE address."""
+    addr_upper = address.upper()
+    for v in vehicles:
+        if v.get("ble_address", "").upper() == addr_upper:
+            return v.get("device_public_key") or None
+    return None
+
+
+async def _store_device_pubkey(address: str, pubkey_hex: str,
+                                vehicles: list[dict]) -> bool:
+    """Store device pubkey via dk-server PATCH /api/vehicles/{id}."""
+    addr_upper = address.upper()
+    vehicle_id = None
+    for v in vehicles:
+        if v.get("ble_address", "").upper() == addr_upper:
+            vehicle_id = v.get("id")
+            break
+    if not vehicle_id:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.patch(
+                f"{DK_SERVER_URL}/api/vehicles/{vehicle_id}",
+                json={"device_public_key": pubkey_hex},
+            )
+            return resp.status_code == 200
+    except Exception:
+        return False
+
+
+from dk_client.crypto import (
+    load_or_create_key, get_public_key_bytes, sign_challenge,
+    verify_device_signature,
+)
 from dk_client.protocol import (
     AUTH_NAMES,
     CHR_AUTH_STATE,
     CHR_CHALLENGE,
+    CHR_DEVICE_AUTH,
+    CHR_DEVICE_PUBKEY,
     CHR_KEY_MGMT,
     CHR_PROVISION,
     CHR_RESPONSE,
@@ -110,6 +194,15 @@ async def status_update_loop():
 
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    # Check session cookie before accepting
+    from dk_client.server.app import validate_session, SESSION_COOKIE
+
+    token = websocket.cookies.get(SESSION_COOKIE)
+    if not token or not validate_session(token):
+        await websocket.accept()
+        await websocket.close(code=4401, reason="unauthorized")
+        return
+
     await websocket.accept()
 
     client_id = str(uuid.uuid4())[:8]
@@ -119,13 +212,15 @@ async def websocket_endpoint(websocket: WebSocket):
     await _ensure_status_subscription()
 
     try:
-        # Send initial state
+        # Send initial state (including registered vehicles from dk-server)
+        reg_vehicles = await fetch_registered_vehicles()
         await send_to_client(client_id, {
             "type": "init",
             "data": {
                 "client_id": client_id,
                 "devices": scanned_devices,
                 "scanning": _scanning,
+                "registered_vehicles": reg_vehicles,
             },
         })
         await broadcast_status()
@@ -210,6 +305,13 @@ async def handle_ws_message(client_id: str, msg: dict):
 
         await _connect_and_auth(client_id, address)
 
+    elif msg_type == "fetch_vehicles":
+        vehicles = await fetch_registered_vehicles()
+        await send_to_client(client_id, {
+            "type": "registered_vehicles",
+            "data": vehicles,
+        })
+
     elif msg_type == "disconnect":
         if ble_client and ble_client.connected:
             await ble_client.disconnect()
@@ -270,8 +372,21 @@ async def _connect_and_auth(client_id: str, address: str):
     await broadcast_log("INFO", f"Connected to {address}")
     await broadcast_status()
 
-    # Step 2: Provision (if no local key exists)
-    key_id, pk = load_or_create_key()
+    # Step 2: Provision — only allowed if key is bound in dk-server
+    reg_vehicles = await fetch_registered_vehicles()
+    bound_key_id = _find_key_for_vehicle(address, reg_vehicles) if reg_vehicles else None
+
+    if not bound_key_id:
+        await _broadcast_progress("provision", "failed", "Not authorized")
+        await broadcast_log("ERROR",
+            "Key not registered in dk-server. "
+            "Register vehicle and bind key first.")
+        await ble_client.disconnect()
+        await broadcast_status()
+        return
+
+    key_id, pk = load_or_create_key(key_id=bound_key_id)
+    await broadcast_log("INFO", f"Authorized key: {key_id}")
     pubkey = get_public_key_bytes(pk)
 
     await _broadcast_progress("provision", "in_progress", key_id)
@@ -302,9 +417,11 @@ async def _connect_and_auth(client_id: str, address: str):
         if success:
             await _broadcast_progress("auth", "done", auth_name)
             await broadcast_log("INFO", f"Authenticated ({auth_name})")
+            asyncio.ensure_future(report_event(address, key_id, "auth", "ok"))
         else:
             await _broadcast_progress("auth", "failed", auth_name)
             await broadcast_log("WARNING", f"Auth state: {auth_name}")
+            asyncio.ensure_future(report_event(address, key_id, "auth", f"failed: {auth_name}"))
 
         await broadcast({"type": "auth_result", "data": {
             "success": success, "state": auth_name, "state_raw": state,
@@ -315,6 +432,48 @@ async def _connect_and_auth(client_id: str, address: str):
         await broadcast({"type": "auth_result", "data": {
             "success": False, "error": str(e),
         }})
+
+    # Step 3.5: Device Auth (mutual authentication)
+    await _broadcast_progress("device_auth", "in_progress")
+    try:
+        device_pubkey = await ble_client.read(CHR_DEVICE_PUBKEY)
+
+        # TOFU: compare with stored pubkey from dk-server
+        expected_hex = _get_device_pubkey(address, reg_vehicles)
+        if expected_hex:
+            if device_pubkey.hex() != expected_hex:
+                await _broadcast_progress("device_auth", "failed",
+                                          "Pubkey mismatch — possible rogue device!")
+                await broadcast_log("WARNING",
+                                    "Device pubkey mismatch! Expected vs actual differ.")
+            else:
+                await broadcast_log("INFO", "Device pubkey verified (TOFU)")
+        else:
+            # First connection: store pubkey via dk-server
+            stored = await _store_device_pubkey(address, device_pubkey.hex(),
+                                                 reg_vehicles)
+            if stored:
+                await broadcast_log("INFO", "Device pubkey captured (TOFU first-use)")
+            else:
+                await broadcast_log("INFO", "Device pubkey noted (dk-server unavailable)")
+
+        # Challenge-response
+        challenge = os.urandom(32)
+        await ble_client.write(CHR_DEVICE_AUTH, challenge)
+        sig = await ble_client.read(CHR_DEVICE_AUTH)
+
+        if verify_device_signature(device_pubkey, challenge, sig):
+            await _broadcast_progress("device_auth", "done", "Device verified")
+            await broadcast_log("INFO", "Device identity verified")
+        else:
+            await _broadcast_progress("device_auth", "failed", "Invalid signature")
+            await broadcast_log("WARNING", "Device signature verification failed")
+    except Exception as e:
+        detail = str(e)
+        if "not found" in detail.lower() or "Not Found" in detail:
+            detail = "Characteristic not found (old firmware?)"
+        await _broadcast_progress("device_auth", "skipped", detail)
+        await broadcast_log("INFO", f"Device auth skipped: {detail}")
 
     # Step 4: Subscribe to status notifications
     await _broadcast_progress("subscribe", "in_progress")

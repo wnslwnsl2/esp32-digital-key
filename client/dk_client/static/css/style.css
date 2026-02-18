@@ -164,6 +164,11 @@ header h1 {
   background-color: #dc2626;
 }
 
+.btn-sm {
+  padding: 6px 14px;
+  font-size: 13px;
+}
+
 /* Lock Status Display */
 .lock-status-display {
   display: flex;

@@ -18,7 +18,9 @@ CHR_RESPONSE      = "03" + _CHR_BASE
 CHR_PROVISION     = "04" + _CHR_BASE
 CHR_LOCK_CMD      = "05" + _CHR_BASE
 CHR_SYSTEM_STATUS = "06" + _CHR_BASE
-CHR_KEY_MGMT      = "07" + _CHR_BASE
+CHR_KEY_MGMT        = "07" + _CHR_BASE
+CHR_DEVICE_PUBKEY   = "08" + _CHR_BASE
+CHR_DEVICE_AUTH     = "09" + _CHR_BASE
 
 # Device name prefix for scanning
 DEVICE_PREFIX = "DK-"

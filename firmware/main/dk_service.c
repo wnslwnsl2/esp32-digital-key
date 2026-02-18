@@ -27,7 +27,9 @@ static const ble_uuid128_t s_response_uuid   = DK_CHR_UUID128(0x03);
 static const ble_uuid128_t s_provision_uuid  = DK_CHR_UUID128(0x04);
 static const ble_uuid128_t s_lock_cmd_uuid   = DK_CHR_UUID128(0x05);
 static const ble_uuid128_t s_status_uuid     = DK_CHR_UUID128(0x06);
-static const ble_uuid128_t s_key_mgmt_uuid   = DK_CHR_UUID128(0x07);
+static const ble_uuid128_t s_key_mgmt_uuid       = DK_CHR_UUID128(0x07);
+static const ble_uuid128_t s_device_pubkey_uuid  = DK_CHR_UUID128(0x08);
+static const ble_uuid128_t s_device_auth_uuid    = DK_CHR_UUID128(0x09);
 
 /* Value handles for notify */
 static uint16_t s_auth_state_handle;
@@ -198,6 +200,65 @@ static int key_mgmt_access(uint16_t conn_handle, uint16_t attr_handle,
     return 0;
 }
 
+static int device_pubkey_access(uint16_t conn_handle, uint16_t attr_handle,
+                                struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op != BLE_GATT_ACCESS_OP_READ_CHR) return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+
+    uint8_t pubkey[65];
+    size_t len = sizeof(pubkey);
+    esp_err_t ret = DkAuth_GetDevicePubkey(pubkey, &len);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "device pubkey not available");
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+
+    os_mbuf_append(ctxt->om, pubkey, len);
+    return 0;
+}
+
+static int device_auth_access(uint16_t conn_handle, uint16_t attr_handle,
+                               struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    dk_conn_state_t *conn = DkAuth_FindConn(conn_handle);
+    if (!conn) return BLE_ATT_ERR_UNLIKELY;
+
+    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        /* Client writes 32-byte challenge */
+        uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
+        if (len != 32) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+
+        os_mbuf_copydata(ctxt->om, 0, 32, conn->device_challenge);
+        conn->device_challenge_valid = true;
+        ESP_LOGI(TAG, "device challenge received from conn=%d", conn_handle);
+        return 0;
+    }
+
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        /* Client reads DER signature */
+        if (!conn->device_challenge_valid) {
+            ESP_LOGW(TAG, "no device challenge pending for conn=%d", conn_handle);
+            return BLE_ATT_ERR_UNLIKELY;
+        }
+
+        uint8_t sig[128];
+        size_t sig_len = sizeof(sig);
+        esp_err_t ret = DkAuth_SignChallenge(conn, conn->device_challenge, 32,
+                                              sig, &sig_len);
+        conn->device_challenge_valid = false;
+
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "device sign failed for conn=%d", conn_handle);
+            return BLE_ATT_ERR_UNLIKELY;
+        }
+
+        os_mbuf_append(ctxt->om, sig, sig_len);
+        return 0;
+    }
+
+    return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+}
+
 /* ── GATT service table ──────────────────────────────────── */
 
 static const struct ble_gatt_svc_def s_gatt_svcs[] = {
@@ -248,6 +309,18 @@ static const struct ble_gatt_svc_def s_gatt_svcs[] = {
                 .uuid = &s_key_mgmt_uuid.u,
                 .access_cb = key_mgmt_access,
                 .flags = BLE_GATT_CHR_F_WRITE,
+            },
+            /* 08: Device Public Key (Read) */
+            {
+                .uuid = &s_device_pubkey_uuid.u,
+                .access_cb = device_pubkey_access,
+                .flags = BLE_GATT_CHR_F_READ,
+            },
+            /* 09: Device Auth (Read | Write) */
+            {
+                .uuid = &s_device_auth_uuid.u,
+                .access_cb = device_auth_access,
+                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
             },
             {0}, /* terminator */
         },

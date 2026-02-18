@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Digital Key — Login</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <style>
+    .login-wrapper {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+    }
+    .login-card {
+      width: 100%;
+      max-width: 360px;
+    }
+    .login-card h1 {
+      font-size: 20px;
+      font-weight: 600;
+      text-align: center;
+      margin-bottom: 24px;
+    }
+    .login-card .form-group {
+      margin-bottom: 16px;
+    }
+    .login-card .form-group input {
+      width: 100%;
+      font-size: 18px;
+      text-align: center;
+      letter-spacing: 8px;
+      padding: 14px;
+    }
+    .login-card .btn {
+      width: 100%;
+    }
+    .login-error {
+      color: var(--color-danger);
+      font-size: 14px;
+      text-align: center;
+      margin-top: 12px;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="login-wrapper">
+    <div class="card login-card">
+      <h1>Digital Key</h1>
+      <form id="login-form">
+        <div class="form-group">
+          <label>PIN</label>
+          <input type="password" id="pin-input" inputmode="numeric" pattern="[0-9]*"
+                 placeholder="····" autocomplete="off" autofocus>
+        </div>
+        <button type="submit" class="btn btn-primary">Login</button>
+        <div class="login-error" id="login-error">Invalid PIN</div>
+      </form>
+    </div>
+  </div>
+  <script>
+    const form = document.getElementById('login-form');
+    const pinInput = document.getElementById('pin-input');
+    const errorEl = document.getElementById('login-error');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errorEl.style.display = 'none';
+      const pin = pinInput.value;
+      if (!pin) return;
+
+      try {
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pin }),
+        });
+        if (res.ok) {
+          window.location.href = '/';
+        } else {
+          const data = await res.json().catch(() => ({}));
+          errorEl.textContent = data.error || 'Invalid PIN';
+          errorEl.style.display = 'block';
+          pinInput.value = '';
+          pinInput.focus();
+        }
+      } catch {
+        errorEl.textContent = 'Server unavailable';
+        errorEl.style.display = 'block';
+      }
+    });
+  </script>
+</body>
+</html>

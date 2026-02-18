@@ -10,12 +10,14 @@
   <div class="container">
     <header>
       <h1>Digital Key</h1>
+      <button id="btn-logout" class="btn btn-sm" onclick="logout()">Logout</button>
     </header>
 
     <!-- Connection -->
     <div class="card">
       <h2>Connection</h2>
       <div class="button-group">
+        <button id="btn-refresh-vehicles" class="btn" title="Refresh registered vehicles from dk-server">Vehicles</button>
         <button id="btn-scan" class="btn btn-primary">Scan</button>
         <select id="device-select" disabled>
           <option value="">Select a device</option>
@@ -57,6 +59,19 @@
           <div class="step-content">
             <div class="step-header">
               <span class="step-label">Authenticate</span>
+              <span class="step-time"></span>
+            </div>
+            <div class="step-detail"></div>
+          </div>
+        </div>
+        <div class="step" id="step-device_auth">
+          <div class="step-indicator">
+            <span class="step-icon">&#9679;</span>
+            <span class="step-line"></span>
+          </div>
+          <div class="step-content">
+            <div class="step-header">
+              <span class="step-label">Device Auth</span>
               <span class="step-time"></span>
             </div>
             <div class="step-detail"></div>

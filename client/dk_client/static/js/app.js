@@ -7,6 +7,7 @@ let ws = null;
 let clientId = null;
 let connected = false;
 let devices = [];
+let registeredVehicles = [];
 let stepStartTimes = {};
 
 // DOM Elements
@@ -18,6 +19,7 @@ const elements = {
   stepConnect: document.getElementById('step-connect'),
   stepProvision: document.getElementById('step-provision'),
   stepAuth: document.getElementById('step-auth'),
+  stepDeviceAuth: document.getElementById('step-device_auth'),
   stepSubscribe: document.getElementById('step-subscribe'),
   lockIndicator: document.getElementById('lock-indicator'),
   lockStateText: document.getElementById('lock-state-text'),
@@ -30,6 +32,7 @@ const elements = {
   keyIdInput: document.getElementById('key-id-input'),
   btnApprove: document.getElementById('btn-approve'),
   btnDelete: document.getElementById('btn-delete'),
+  btnRefreshVehicles: document.getElementById('btn-refresh-vehicles'),
   logContainer: document.getElementById('log-container'),
 };
 
@@ -53,7 +56,11 @@ function initWebSocket() {
     handleMessage(msg);
   };
 
-  ws.onclose = () => {
+  ws.onclose = (e) => {
+    if (e.code === 4401) {
+      window.location.href = '/login';
+      return;
+    }
     appendLog('WARNING', 'WebSocket disconnected, reconnecting...');
     clientId = null;
     setTimeout(initWebSocket, 3000);
@@ -74,13 +81,23 @@ function handleMessage(msg) {
   switch (msg.type) {
     case 'init':
       clientId = msg.data.client_id;
-      if (msg.data.devices && msg.data.devices.length > 0) {
-        updateDeviceList(msg.data.devices);
+      if (msg.data.registered_vehicles) {
+        registeredVehicles = msg.data.registered_vehicles;
       }
+      if (msg.data.devices && msg.data.devices.length > 0) {
+        devices = msg.data.devices;
+      }
+      rebuildDeviceSelect();
       if (msg.data.scanning) {
         setScanState(true);
       }
       appendLog('INFO', `Client ID: ${clientId}`);
+      break;
+
+    case 'registered_vehicles':
+      registeredVehicles = msg.data || [];
+      rebuildDeviceSelect();
+      appendLog('INFO', `Registered vehicles: ${registeredVehicles.length}`);
       break;
 
     case 'status':
@@ -92,7 +109,9 @@ function handleMessage(msg) {
       break;
 
     case 'scan_result':
-      updateDeviceList(msg.data, true);
+      devices = msg.data || [];
+      rebuildDeviceSelect();
+      appendLog('INFO', `${devices.length} device(s) found`);
       break;
 
     case 'connect_progress':
@@ -126,6 +145,10 @@ function initEventListeners() {
 
   elements.deviceSelect.addEventListener('change', () => {
     elements.btnConnect.disabled = !elements.deviceSelect.value;
+  });
+
+  elements.btnRefreshVehicles.addEventListener('click', () => {
+    sendWs('fetch_vehicles');
   });
 
   elements.btnApprove.addEventListener('click', () => {
@@ -169,7 +192,7 @@ function toggleConnection() {
     // Show progress, reset steps
     elements.connectProgress.style.display = 'flex';
     stepStartTimes = {};
-    ['stepConnect', 'stepProvision', 'stepAuth', 'stepSubscribe'].forEach(id => {
+    ['stepConnect', 'stepProvision', 'stepAuth', 'stepDeviceAuth', 'stepSubscribe'].forEach(id => {
       const el = elements[id];
       el.className = 'step';
       el.querySelector('.step-detail').textContent = '';
@@ -285,27 +308,48 @@ function updateStatus(data) {
   }
 }
 
-function updateDeviceList(deviceList, showLog = false) {
-  devices = deviceList;
+function rebuildDeviceSelect() {
+  const prev = elements.deviceSelect.value;
+  elements.deviceSelect.innerHTML = '';
 
-  if (deviceList.length > 0) {
-    elements.deviceSelect.innerHTML = '';
-    deviceList.forEach(device => {
-      const option = document.createElement('option');
-      option.value = device.address;
-      option.textContent = `${device.name} (${device.rssi} dBm)`;
-      elements.deviceSelect.appendChild(option);
-    });
-    elements.deviceSelect.selectedIndex = 0;
-    elements.deviceSelect.disabled = false;
-    elements.btnConnect.disabled = false;
-  } else {
-    elements.deviceSelect.innerHTML = '<option value="">Select a device</option>';
+  // Registered vehicles first (from dk-server)
+  const regAddresses = new Set();
+  registeredVehicles.forEach(v => {
+    const addr = v.ble_address || '';
+    if (!addr) return;
+    regAddresses.add(addr.toUpperCase());
+    const option = document.createElement('option');
+    option.value = addr;
+    option.textContent = `[R] ${v.name} (${addr})`;
+    elements.deviceSelect.appendChild(option);
+  });
+
+  // Scanned devices (skip duplicates already shown as registered)
+  devices.forEach(d => {
+    if (regAddresses.has((d.address || '').toUpperCase())) return;
+    const option = document.createElement('option');
+    option.value = d.address;
+    option.textContent = `${d.name} (${d.rssi} dBm)`;
+    elements.deviceSelect.appendChild(option);
+  });
+
+  const hasItems = elements.deviceSelect.options.length > 0;
+  if (!hasItems) {
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = 'Select a device';
+    elements.deviceSelect.appendChild(placeholder);
     elements.deviceSelect.disabled = true;
-  }
-
-  if (showLog) {
-    appendLog('INFO', `${deviceList.length} device(s) found`);
+    elements.btnConnect.disabled = true;
+  } else {
+    elements.deviceSelect.disabled = false;
+    // Restore previous selection if still available
+    if (prev && [...elements.deviceSelect.options].some(o => o.value === prev)) {
+      elements.deviceSelect.value = prev;
+    } else {
+      elements.deviceSelect.selectedIndex = 0;
+    }
+    elements.btnConnect.disabled = false;
   }
 }
 
@@ -319,6 +363,14 @@ function appendLog(level, message) {
   while (elements.logContainer.children.length > 100) {
     elements.logContainer.removeChild(elements.logContainer.firstChild);
   }
+}
+
+// Logout
+async function logout() {
+  try {
+    await fetch('/api/logout', { method: 'POST' });
+  } catch { /* ignore */ }
+  window.location.href = '/login';
 }
 
 function formatTime(date) {

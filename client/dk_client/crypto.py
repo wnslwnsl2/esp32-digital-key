@@ -72,3 +72,20 @@ def get_public_key_bytes(pk: ec.EllipticCurvePrivateKey) -> bytes:
 def sign_challenge(pk: ec.EllipticCurvePrivateKey, challenge: bytes) -> bytes:
     """Sign SHA-256(challenge) with ECDSA, return DER signature."""
     return pk.sign(challenge, ec.ECDSA(hashes.SHA256()))
+
+
+def verify_device_signature(device_pubkey_bytes: bytes, challenge: bytes, signature: bytes) -> bool:
+    """Verify an ECDSA signature from the device's public key.
+
+    Returns True on success, False on invalid signature.
+    """
+    from cryptography.exceptions import InvalidSignature
+
+    pubkey = ec.EllipticCurvePublicKey.from_encoded_point(
+        ec.SECP256R1(), device_pubkey_bytes
+    )
+    try:
+        pubkey.verify(signature, challenge, ec.ECDSA(hashes.SHA256()))
+        return True
+    except InvalidSignature:
+        return False
