@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "esp32-dk-client"
-version = "0.1.0"
+version = "1.0.0"
 description = "BLE client for ESP32 Digital Key system"
 requires-python = ">=3.10"
 license = {text = "MIT"}
