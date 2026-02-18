@@ -38,7 +38,7 @@ function renderVehicles(vehicles) {
           <span class="vehicle-date">&middot; ${formatDate(v.created_at)}</span>
         </div>
         <div>
-          <button class="btn-icon" title="Add key" onclick="showAddKey('${v.id}')">🔑</button>
+          <button class="btn-icon" title="Set owner" onclick="showSetOwner('${v.id}')">👤</button>
           <button class="btn-icon" title="Delete vehicle" onclick="removeVehicle('${v.id}','${esc(v.name)}')">✕</button>
         </div>
       </div>
@@ -168,38 +168,23 @@ async function removeVehicle(id, name) {
   loadVehicles();
 }
 
-// --- Key management ---
+// --- Set Owner ---
 
-function _populateAccountSelect(selectId) {
-  const sel = document.getElementById(selectId);
+function showSetOwner(vehicleId) {
+  document.getElementById('owner-vehicle-id').value = vehicleId;
+  const sel = document.getElementById('owner-account');
   sel.innerHTML = accountList.map(a =>
     `<option value="${esc(a.name)}">${esc(a.name)}</option>`
   ).join('');
+  document.getElementById('set-owner-modal').classList.add('active');
 }
 
-function toggleExpiry() {
-  const role = document.getElementById('key-role').value;
-  document.getElementById('key-expiry-group').style.display = role === 'guest' ? '' : 'none';
-}
-
-function showAddKey(vehicleId) {
-  document.getElementById('key-vehicle-id').value = vehicleId;
-  document.getElementById('key-role').value = 'owner';
-  document.getElementById('key-expires').value = '';
-  toggleExpiry();
-  _populateAccountSelect('key-account');
-  document.getElementById('add-key-modal').classList.add('active');
-}
-
-async function addKey() {
-  const vehicleId = document.getElementById('key-vehicle-id').value;
-  const account = document.getElementById('key-account').value;
-  const role = document.getElementById('key-role').value;
-  const expires_at = document.getElementById('key-expires').value || '';
-
+async function setOwner() {
+  const vehicleId = document.getElementById('owner-vehicle-id').value;
+  const account = document.getElementById('owner-account').value;
   if (!account) return alert('Select an account');
-  await api('POST', `/api/vehicles/${vehicleId}/keys`, { account, role, expires_at });
-  hideModal('add-key-modal');
+  await api('POST', `/api/vehicles/${vehicleId}/keys`, { account, role: 'owner' });
+  hideModal('set-owner-modal');
   loadVehicles();
 }
 

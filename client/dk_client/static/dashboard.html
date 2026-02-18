@@ -263,30 +263,18 @@
     </div>
   </div>
 
-  <!-- Add Key Modal -->
-  <div class="modal-overlay" id="add-key-modal">
+  <!-- Set Owner Modal -->
+  <div class="modal-overlay" id="set-owner-modal">
     <div class="modal">
-      <h3>Add Key</h3>
-      <input type="hidden" id="key-vehicle-id">
+      <h3>Set Owner</h3>
+      <input type="hidden" id="owner-vehicle-id">
       <div class="form-group">
         <label>Account</label>
-        <select id="key-account"></select>
-      </div>
-      <div class="form-group">
-        <label>Role</label>
-        <select id="key-role" onchange="toggleExpiry()">
-          <option value="owner">Owner</option>
-          <option value="family">Family</option>
-          <option value="guest">Guest</option>
-        </select>
-      </div>
-      <div class="form-group" id="key-expiry-group" style="display:none">
-        <label>Expires at</label>
-        <input type="datetime-local" id="key-expires">
+        <select id="owner-account"></select>
       </div>
       <div class="modal-actions">
-        <button class="btn-sm btn-outline" onclick="hideModal('add-key-modal')">Cancel</button>
-        <button class="btn-sm btn-primary" onclick="addKey()">Create Key</button>
+        <button class="btn-sm btn-outline" onclick="hideModal('set-owner-modal')">Cancel</button>
+        <button class="btn-sm btn-primary" onclick="setOwner()">Set Owner</button>
       </div>
     </div>
   </div>
