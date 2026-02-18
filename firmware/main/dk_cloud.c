@@ -203,26 +203,25 @@ static void sync_keys(void)
         }
     }
 
-    /* Delete keys that are no longer on server.
-     * Walk the keystore and check if each key_id is still in server list.
-     * We check by trying GetPubkey for each server_id — keys NOT in server
-     * should be removed. We need to iterate differently since we don't have
-     * a keystore iterator. Use a simpler approach: try to find non-matching. */
+    /* Delete local keys that are no longer on server.
+     * Walk keystore backwards (indices shift on delete) and remove
+     * any key_id not found in the server list. */
+    for (int i = DkKeystore_Count() - 1; i >= 0; i--) {
+        char local_kid[16];
+        if (DkKeystore_GetKeyIdAt(i, local_kid) != ESP_OK) continue;
 
-    /* For deletion, we need to know which local keys aren't on the server.
-     * Since there's no keystore iterator, we'll check each server_id against
-     * keystore. For keys we can't check, we rely on the keystore count.
-     * A more robust approach would need a keystore iterator, but for now
-     * we only delete if the server explicitly doesn't list a key. */
-
-    /* Simple approach: if server has fewer keys than keystore registered count,
-     * there might be revoked keys. Walk server list and collect all key_ids,
-     * then for any key_id we know was cloud-provisioned but is missing, delete. */
-
-    /* TODO: Add keystore iterator for precise deletion.
-     * For now, deletion happens when dk-server removes a key and the next
-     * provisioning cycle re-syncs. Cloud keys auto-approve, so the main
-     * deletion path is via the server dashboard. */
+        bool found = false;
+        for (int j = 0; j < server_id_count; j++) {
+            if (memcmp(local_kid, server_ids[j], 16) == 0) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            ESP_LOGI(TAG, "revoking key not on server: %.16s", local_kid);
+            DkKeystore_DeleteKey(local_kid);
+        }
+    }
 
     cJSON_Delete(root);
 }

@@ -170,6 +170,37 @@ async def api_accounts():
         return JSONResponse([], status_code=200)
 
 
+@app.get("/api/my-vehicles")
+async def api_my_vehicles(request: Request):
+    """Return vehicles for the logged-in account."""
+    token = request.cookies.get(SESSION_COOKIE)
+    account = _sessions.get(token, "") if token else ""
+    if not account:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                f"{DK_SERVER_URL}/api/vehicles",
+                params={"account": account},
+            )
+            return JSONResponse(resp.json(), status_code=resp.status_code)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+
+
+@app.delete("/api/vehicles/{vehicle_id}/keys/{key_id}")
+async def api_delete_key(vehicle_id: str, key_id: str):
+    """Proxy key deletion to dk-server."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.delete(
+                f"{DK_SERVER_URL}/api/vehicles/{vehicle_id}/keys/{key_id}",
+            )
+            return JSONResponse(resp.json(), status_code=resp.status_code)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+
+
 @app.post("/api/share")
 async def api_share(request: Request):
     """Share vehicle — proxy to dk-server."""

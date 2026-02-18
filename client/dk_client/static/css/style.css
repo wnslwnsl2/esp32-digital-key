@@ -466,6 +466,54 @@ select:disabled {
   color: #f87171;
 }
 
+/* Shared Keys */
+.shared-key-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  font-size: 13px;
+}
+
+.shared-key-item + .shared-key-item {
+  border-top: 1px solid var(--color-border);
+}
+
+.role-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.role-badge.family {
+  background-color: #dbeafe;
+  color: #1d4ed8;
+}
+
+.role-badge.guest {
+  background-color: #fef3c7;
+  color: #92400e;
+}
+
+.btn-revoke {
+  background: none;
+  border: none;
+  color: var(--color-text-secondary);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.btn-revoke:hover {
+  background-color: #fee2e2;
+  color: var(--color-danger);
+}
+
 /* Modal */
 .modal-overlay {
   display: none;

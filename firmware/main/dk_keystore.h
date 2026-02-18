@@ -38,3 +38,9 @@ esp_err_t DkKeystore_EraseAll(void);
 
 uint8_t DkKeystore_RegisteredCount(void);
 uint8_t DkKeystore_PendingCount(void);
+
+/** Total key count (registered + pending). */
+uint8_t DkKeystore_Count(void);
+
+/** Get key_id at index (0-based). Returns ESP_ERR_NOT_FOUND if out of range. */
+esp_err_t DkKeystore_GetKeyIdAt(uint8_t index, char out_key_id[16]);

@@ -181,3 +181,15 @@ uint8_t DkKeystore_PendingCount(void)
     }
     return n;
 }
+
+uint8_t DkKeystore_Count(void)
+{
+    return s_key_count;
+}
+
+esp_err_t DkKeystore_GetKeyIdAt(uint8_t index, char out_key_id[16])
+{
+    if (index >= s_key_count) return ESP_ERR_NOT_FOUND;
+    memcpy(out_key_id, s_keys[index].key_id, 16);
+    return ESP_OK;
+}

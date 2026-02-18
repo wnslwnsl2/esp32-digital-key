@@ -1,138 +1,102 @@
-# Digital Key 시스템 — 전체 프로세스
+# Digital Key — 설정 및 사용 가이드
 
-## 구성 요소
+## 1. 시스템 시작
 
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  dk-server   │     │   dk-web    │     │   ESP32-S3   │
-│  :8100       │     │   :8000     │     │  (차량)      │
-│              │     │             │     │              │
-│ 키 생성/관리  │     │ BLE 연결    │     │ BLE + WiFi   │
-│ 차량 등록     │     │ 챌린지-응답  │     │ NVS 키저장소  │
-│ 계정 관리     │     │ 잠금/해제   │     │ 근접 감지     │
-└──────┬───────┘     └──────┬──────┘     └──────┬───────┘
-       │                    │                    │
-       │   HTTP API         │  WebSocket+BLE     │  WiFi HTTP
-       └────────────────────┴────────────────────┘
+### 1-1. dk-server 시작
+
+```bash
+dk-server
 ```
 
-| 구성 요소 | 역할 | 접속 |
-|-----------|------|------|
-| **dk-server** | 키 생성, 차량/계정/키 관리 (딜러용 대시보드) | `http://localhost:8100` (브라우저) |
-| **dk-web** | 사용자 Web UI, BLE로 차량 연결/인증/잠금 | `http://localhost:8000` |
-| **ESP32-S3** | 차량 측 장치, BLE 광고 + WiFi로 서버에서 키 수신 (2.4GHz only) | BLE `DK-XXXX` |
-
----
-
-## 1. 초기 설정
-
-### 1-1. 계정 생성
-
-dk-server 첫 실행 시 계정을 만든다.
+첫 실행 시 계정을 생성한다:
 
 ```
-$ dk-server
 First run — set up an account for dk-server.
 Name: Chandler
 PIN: ****
 Digital Key Server running on http://0.0.0.0:8100
   LAN: http://172.30.1.9:8100
-  ESP32 DK_SERVER_URL: http://172.30.1.9:8100
 ```
 
-대시보드(`http://localhost:8100`)에서 추가 계정도 만들 수 있다.
-예: `Chandler`(딜러), `42dot`(공유 대상)
+대시보드: `http://localhost:8100`
 
-### 1-2. 차량 등록
+### 1-2. dk-web 시작
 
-dk-server 대시보드에서:
-1. **+ Add** 클릭
-2. 차량 이름 (`My Car`) + BLE 주소 (`AA:BB:CC:DD:EE:FF`) 입력
-3. **Register**
-
-이 BLE 주소는 ESP32의 주소다. (`idf.py monitor`에서 `BT addr: XX:XX:XX:XX:XX:XX` 로그로 확인)
-
----
-
-## 2. 키 생성 (dk-server)
-
-### 이전 방식 (로컬)
-```
-로컬 PEM 파일 생성 → 수동으로 key_id 입력 → BLE로 직접 프로비저닝
+```bash
+dk-web
 ```
 
-### 현재 방식 (클라우드)
-```
-dk-server가 자동으로 키페어 생성 → 서버에 저장 → ESP32가 WiFi로 받아감
-```
+사용자 앱: `http://localhost:8000`
 
-### 2-1. 키 추가 과정
+### 1-3. ESP32 펌웨어
 
-dk-server 대시보드에서 차량 카드의 🔑 버튼 클릭:
+WiFi 설정 (`firmware/main/dk_wifi.h`):
 
-1. **Account** 선택 — 이 키를 사용할 계정 (예: `Chandler`)
-2. **Role** 선택 — `owner` / `family` / `guest`
-3. guest 선택 시 **만료일** 입력
-4. **Create Key** 클릭
-
-서버가 내부적으로 하는 일:
-```python
-# 1. ECC P-256 키페어 자동 생성
-private_key = ec.generate_private_key(SECP256R1)
-public_key  = private_key.public_key()   # 65바이트 (04 + X + Y)
-key_id      = random 16자리 hex
-
-# 2. vehicles.json에 저장
-{
-  "key_id": "a1b2c3d4e5f6a7b8",
-  "account": "Chandler",
-  "role": "owner",
-  "public_key": "04ab12...cd34",     ← 130자 hex (ESP32에 전달)
-  "private_key": "-----BEGIN...",     ← PEM (dk-web이 다운로드)
-  "expires_at": null
-}
-```
-
-**핵심: private key는 서버에만 저장되고, public key만 ESP32에 전달된다.**
-
----
-
-## 3. ESP32 키 수신 (WiFi 클라우드 동기화)
-
-### 3-1. ESP32 WiFi 설정
-
-`firmware/main/dk_wifi.h` 상단의 상수를 수정:
 ```c
-#define DK_WIFI_SSID             "MyWiFi"    /* 비워두면 WiFi 비활성화 */
+#define DK_WIFI_SSID             "MyWiFi"
 #define DK_WIFI_PASSWORD         "password"
 #define DK_SERVER_URL            "http://dk-server.local:8100"
 #define DK_CLOUD_POLL_INTERVAL_S  30
 ```
 
-> **ESP32-S3는 2.4GHz WiFi만 지원.** 5GHz SSID에는 연결 불가.
+> `DK_WIFI_SSID`를 비워두면 WiFi/Cloud 모듈은 skip되고 BLE-only로 동작한다.
+> ESP32-S3는 **2.4GHz WiFi만** 지원.
 
-`DK_SERVER_URL`은 `http://dk-server.local:8100`이 기본값.
-dk-server가 mDNS로 `dk-server.local`을 광고하므로 IP 하드코딩 불필요.
+빌드 및 플래시:
 
-### 3-2. 부팅 순서
-
-```c
-app_main()
-├── NVS 초기화
-├── DkAuth_Init()
-├── DkKeystore_Init()       // NVS에서 기존 키 로드
-├── DkLock_Init()
-├── DkLed_Init()
-├── DkWifi_Init()           // WiFi STA 연결 (비동기)
-├── DkCloud_Init()          // 클라우드 동기화 task 시작
-├── BleStack_Init()         // BLE 광고 시작 "DK-XXXX"
-├── DkProximity_Init()
-└── DkButton_Init()
+```bash
+cd firmware
+idf.py build
+idf.py -p /dev/ttyUSB0 flash monitor
 ```
 
-### 3-3. 클라우드 동기화 동작
+---
 
-`dk_cloud` task가 30초마다 반복:
+## 2. 초기 설정 (dk-server 대시보드)
+
+### 2-1. 계정 추가
+
+대시보드에서 Accounts → **+ Add**:
+- Name: 계정 이름 (예: `42dot`)
+- PIN: 로그인 비밀번호
+
+### 2-2. 차량 등록
+
+대시보드에서 Vehicles → **+ Add**:
+- Name: 차량 이름 (예: `My Car`)
+- BLE Address: ESP32의 BLE 주소 (`AA:BB:CC:DD:EE:FF`)
+
+> BLE 주소는 `idf.py monitor`에서 `BT addr: XX:XX:XX:XX:XX:XX` 로그로 확인
+
+### 2-3. Owner 지정
+
+차량 카드에서 👤 버튼 → 계정 선택 → **Set Owner**
+
+이때 서버가 자동으로:
+1. ECC P-256 키페어 생성 (key_id + public_key + private_key)
+2. `account=선택한 계정`, `role=owner`로 저장
+
+---
+
+## 3. ESP32 클라우드 동기화
+
+ESP32 부팅 후 WiFi 연결이 완료되면:
+
+### 3-1. Device Pubkey 등록
+
+```
+ESP32                              dk-server
+  │                                    │
+  │  POST /api/provision/AA:BB:.../device-key
+  │  { "device_public_key": "04ab..." }
+  │ ──────────────────────────────────>│
+  │                                    │  → 차량 레코드에 저장
+```
+
+ESP32가 자체 생성한 ECC P-256 device keypair의 public key를 서버에 등록한다.
+이후 dk-web이 상호 인증 시 이 값을 참조하여 rogue device를 감지한다.
+
+### 3-2. 키 동기화 (30초 주기)
 
 ```
 ESP32                              dk-server
@@ -142,167 +106,151 @@ ESP32                              dk-server
   │                                    │
   │  { "keys": [                       │
   │    { "key_id": "a1b2...",          │
-  │      "public_key": "04ab..." },    │
-  │    { "key_id": "f9e8...",          │
-  │      "public_key": "04cd..." }     │
+  │      "public_key": "04ab..." }     │
   │  ]}                                │
   │ <──────────────────────────────────│
   │                                    │
-  │  → 새 키: NVS keystore에 추가       │
-  │  → 삭제된 키: (다음 구현 예정)       │
+  │  → 새 키: NVS에 추가 + auto-approve│
 ```
 
-ESP32 로그 예시:
+ESP32 로그:
+
 ```
-I (dk_wifi) WiFi STA initialized, connecting to MyWiFi
 I (dk_wifi) got IP: 192.168.0.15
-I (dk_cloud) cloud key sync task started (poll every 30s)
-I (dk_cloud) WiFi connected, starting cloud key sync
-I (dk_cloud) server has 2 keys for AA:BB:CC:DD:EE:FF
+I (dk_cloud) registering device pubkey to server
+I (dk_cloud) device pubkey registered successfully
+I (dk_cloud) server has 1 keys for AA:BB:CC:DD:EE:FF
 I (dk_cloud) added key from cloud: a1b2c3d4e5f6a7b8
 ```
 
-**`DK_WIFI_SSID`를 비워두면** WiFi/Cloud 모듈은 자동으로 스킵되고, 기존 BLE-only 방식으로 동작한다.
-
 ---
 
-## 4. dk-web 로그인 및 차량 연결
+## 4. dk-web 사용
 
 ### 4-1. 로그인
 
-사용자가 `http://localhost:8000`에서 PIN 로그인.
-PIN은 dk-server의 계정 시스템으로 검증된다.
+`http://localhost:8000`에서 PIN 입력 → dk-server로 검증 → 세션 생성
 
-```
-사용자 Chandler → PIN 입력 → dk-server 검증 → 세션 생성
-```
+### 4-2. 자동 연결
 
-### 4-2. 차량 목록 필터링
+로그인 후 화면:
+- **Account, Vehicle, Role** 정보 표시
+- 등록된 차량을 자동으로 BLE 스캔
+- 차량 발견 시 자동 연결 + 인증
 
-로그인한 계정에 키가 배정된 차량만 표시된다.
+연결 과정 (Progress UI에 표시):
 
-```
-dk-web                         dk-server
-  │                                │
-  │  GET /api/vehicles?account=Chandler
-  │ ──────────────────────────────>│
-  │                                │
-  │  (Chandler의 키가 있는 차량만)  │
-  │ <──────────────────────────────│
-```
+| Step | 동작 |
+|------|------|
+| **Connect** | BLE 연결 |
+| **Authenticate** | dk-server에서 private key 다운로드 → 챌린지-응답 |
+| **Device Auth** | 서버 등록 device pubkey와 비교 → 상호 인증 |
+| **Subscribe** | 200ms 주기 상태 모니터링 시작 |
 
-- `Chandler`로 로그인 → Chandler에게 배정된 키가 있는 차량 표시
-- `42dot`로 로그인 → 42dot에게 공유된 차량만 표시
+연결 완료 후:
+- 잠금/해제 상태 실시간 표시
+- RSSI, Zone, Auth 상태 모니터링
+- BLE 끊기면 자동으로 재스캔 → 재연결
 
-### 4-3. BLE 연결 + 인증
+### 4-3. 키 공유
 
-차량을 선택하면 다음 과정이 자동 실행:
+Owner만 사용 가능. Info 카드에 **Share** 버튼이 표시된다.
 
-```
-dk-web                    ESP32
-  │                         │
-  │ ① BLE Connect           │
-  │ ───────────────────────>│
-  │                         │
-  │ ② Private key 다운로드   │     dk-server
-  │     GET /api/vehicles/{id}/keys/{key_id}/private
-  │ ─────────────────────────────────────────>│
-  │ <─────────────────────── PEM 응답 ────────│
-  │                         │
-  │ ③ Provision (pubkey)    │
-  │ ───────────────────────>│  (이미 WiFi로 받았으면 skip)
-  │                         │
-  │ ④ Challenge 읽기        │
-  │ <───────────────────────│  32바이트 랜덤
-  │                         │
-  │ ⑤ 서명 (private key)    │
-  │  sig = ECDSA(challenge) │
-  │                         │
-  │ ⑥ Response 쓰기         │
-  │ ───────────────────────>│
-  │   key_id + signature    │
-  │                         │
-  │ ⑦ ESP32 검증            │
-  │   pubkey로 sig 검증  ✓  │
-  │                         │
-  │ ⑧ Auth State 읽기       │
-  │ <───────────────────────│  AUTH_OK (3)
-  │                         │
-  │ ⑨ 잠금/해제 가능         │
-```
-
-**이전과 달라진 점:**
-- 이전: 로컬 `~/.dk-client/{key_id}.pem` 파일 필요
-- 현재: dk-server에서 private key를 HTTP로 다운로드 → 로컬 PEM 불필요
-
-로컬 PEM이 있으면 fallback으로 여전히 사용 가능 (하위 호환).
-
----
-
-## 5. 키 공유
-
-### 5-1. 딜러가 다른 계정에 차량 공유
-
-dk-server 대시보드에서 차량 카드의 👥 버튼 클릭:
-
-1. **Account** 선택 — 공유 대상 (예: `42dot`)
-2. **Role** 선택 — `family` 또는 `guest`
-3. guest면 **만료일** 설정
-4. **Share** 클릭
+1. **Share** 클릭
+2. 공유 대상 계정 선택
+3. Role 선택: `Family` 또는 `Guest`
+4. Guest면 만료일 설정
+5. **Share** 클릭
 
 내부 동작:
-```
-dk-server: 새 키페어 생성 → account=42dot으로 저장
-           ↓
-ESP32: 다음 폴링(30초 이내)에서 새 public key 수신 → NVS에 추가
-           ↓
-42dot: dk-web 로그인 → 공유된 차량 보임 → BLE 연결/인증 성공
-```
-
-### 5-2. 키 회수
-
-dk-server 대시보드에서 해당 키의 ✕ 버튼 클릭.
 
 ```
-dk-server: 키 삭제
-           ↓
-ESP32: 다음 폴링에서 키 목록 변경 감지 (삭제 로직은 추후 구현)
-           ↓
-42dot: 인증 시도 → ESP32에 public key 없음 → 인증 실패
+dk-web → POST /api/share → dk-server (새 키페어 생성)
+                                ↓
+ESP32 ← WiFi 폴링 (30초 이내) ← dk-server (새 public key)
+                                ↓
+공유 대상: dk-web 로그인 → 차량 표시 → BLE 연결/인증 성공
 ```
+
+### 4-4. 키 회수
+
+dk-server 대시보드에서 해당 키의 ✕ 버튼으로 삭제.
+ESP32가 다음 폴링에서 키 목록 변경을 감지하고 적용한다.
 
 ---
 
-## 6. 데이터 흐름 요약
+## 5. 데이터 모델
 
-```
-                    vehicles.json
-                    ┌─────────────────────────────┐
-                    │ { id, name, ble_address,     │
-                    │   keys: [                    │
-                    │     { key_id,                │
-                    │       account: "Chandler",   │
-                    │       role: "owner",         │
-                    │       public_key: "04ab...", │◄── ESP32에 전달 (WiFi)
-                    │       private_key: "PEM..." }│◄── dk-web이 다운로드 (HTTP)
-                    │   ]                          │
-                    │ }                            │
-                    └─────────────────────────────┘
-                           │
-              ┌────────────┼────────────┐
-              ▼            ▼            ▼
-         dk-server     dk-web       ESP32
-        (관리/생성)   (인증/사용)   (검증/저장)
+### Vehicle (vehicles.json)
+
+```json
+{
+  "id": "uuid8자",
+  "name": "My Car",
+  "ble_address": "AA:BB:CC:DD:EE:FF",
+  "device_public_key": "04ab...(130 hex)",
+  "created_at": "ISO timestamp",
+  "keys": [...]
+}
 ```
 
-| 데이터 | 어디에 | 누가 사용 |
-|--------|--------|-----------|
-| private_key (PEM) | dk-server `vehicles.json` | dk-web이 HTTP로 다운로드해서 서명에 사용 |
-| public_key (hex) | dk-server + ESP32 NVS | ESP32가 서명 검증에 사용 |
-| key_id | 모든 곳 | 키 식별자 (16자 hex) |
-| account | dk-server | 키 소유 계정, 차량 필터링에 사용 |
-| role | dk-server + 대시보드 | owner/family/guest 구분 |
-| expires_at | dk-server | guest 키 만료 시간 (표시용, 검증은 추후) |
+### Key
+
+```json
+{
+  "key_id": "16자 hex",
+  "account": "Chandler",
+  "role": "owner",
+  "public_key": "04ab...(130 hex)",
+  "private_key": "-----BEGIN PRIVATE KEY-----\n...",
+  "expires_at": null,
+  "created_at": "ISO timestamp"
+}
+```
+
+| 데이터 | 위치 | 용도 |
+|--------|------|------|
+| private_key | dk-server (vehicles.json) | dk-web이 HTTP로 다운로드하여 서명 |
+| public_key | dk-server + ESP32 NVS | ESP32가 서명 검증 |
+| device_public_key | dk-server + ESP32 (자체 생성) | dk-web이 상호 인증에 사용 |
+| key_id | 모든 곳 | 키 식별자 |
+| account | dk-server | 키 소유 계정, 차량 필터링 |
+
+---
+
+## 6. API Reference
+
+### dk-server (:8100)
+
+| Method | Path | 설명 |
+|--------|------|------|
+| `POST` | `/api/login` | PIN 로그인 |
+| `GET` | `/api/accounts` | 계정 목록 |
+| `POST` | `/api/accounts` | 계정 생성 (name, pin) |
+| `DELETE` | `/api/accounts/{name}` | 계정 삭제 |
+| `GET` | `/api/vehicles` | 차량 목록 (`?account=X`로 필터링) |
+| `POST` | `/api/vehicles` | 차량 등록 (name, ble_address) |
+| `DELETE` | `/api/vehicles/{id}` | 차량 삭제 |
+| `POST` | `/api/vehicles/{id}/keys` | 키 생성 (account, role) |
+| `GET` | `/api/vehicles/{id}/keys/{kid}/private` | Private key PEM 다운로드 |
+| `DELETE` | `/api/vehicles/{id}/keys/{kid}` | 키 삭제 |
+| `POST` | `/api/vehicles/{id}/share` | 키 공유 (account, role, expires_at) |
+| `GET` | `/api/provision/{ble_addr}` | ESP32용 — public key 목록 |
+| `POST` | `/api/provision/{ble_addr}/device-key` | ESP32 device pubkey 등록 |
+| `GET` | `/api/events` | 이벤트 로그 |
+| `POST` | `/api/events` | 이벤트 기록 |
+
+### dk-web (:8000)
+
+| Method | Path | 설명 |
+|--------|------|------|
+| `GET` | `/` | 메인 UI (index.html) |
+| `GET` | `/login` | 로그인 페이지 |
+| `POST` | `/api/login` | PIN 로그인 (dk-server 프록시) |
+| `POST` | `/api/logout` | 로그아웃 |
+| `GET` | `/api/accounts` | 계정 목록 (dk-server 프록시) |
+| `POST` | `/api/share` | 키 공유 (dk-server 프록시) |
+| `WS` | `/ws` | WebSocket (실시간 BLE 제어) |
 
 ---
 
@@ -310,12 +258,16 @@ ESP32: 다음 폴링에서 키 목록 변경 감지 (삭제 로직은 추후 구
 
 | # | 테스트 | 확인 방법 |
 |---|--------|-----------|
-| 1 | 키 자동 생성 | 대시보드에서 🔑 → account 선택 → Create Key → 키 목록에 key_id, account, role 표시 |
-| 2 | ESP32 WiFi 동기화 | `idf.py monitor` → `dk_cloud: added key from cloud: xxxx` 로그 |
-| 3 | dk-web 로그인 필터링 | Chandler로 로그인 → Chandler 키가 있는 차량만 표시 |
-| 4 | 클라우드 키 인증 | dk-web에서 차량 연결 → `Using cloud key: xxxx` 로그 → AUTH_OK |
-| 5 | 키 공유 | 대시보드 👥 → 42dot에 공유 → 42dot 로그인 → 차량 표시 → 연결 성공 |
-| 6 | 키 회수 | 대시보드에서 키 ✕ → 42dot 재연결 시 인증 실패 |
+| 1 | 계정/차량 등록 | dk-server 대시보드에서 생성 확인 |
+| 2 | Owner 지정 | 👤 → 계정 선택 → 키 목록에 owner 표시 |
+| 3 | ESP32 WiFi 동기화 | `idf.py monitor` → `dk_cloud: added key from cloud` |
+| 4 | Device pubkey 등록 | `dk_cloud: device pubkey registered successfully` |
+| 5 | dk-web 로그인 | PIN 입력 → 계정/차량 정보 표시 |
+| 6 | Auto-scan + 연결 | 차량 자동 발견 → progress 표시 → 연결 완료 |
+| 7 | 상호 인증 | Device Auth step done 확인 |
+| 8 | 키 공유 | Owner로 Share → 대상 계정 로그인 → 차량 표시 → 연결 성공 |
+| 9 | 키 회수 | 대시보드에서 키 삭제 → 대상 계정 인증 실패 |
+| 10 | Factory reset | BOOT 3초 → NVS 삭제 → 재동기화 |
 
 ---
 
@@ -325,42 +277,16 @@ ESP32: 다음 폴링에서 키 목록 변경 감지 (삭제 로직은 추후 구
 같은 2.4GHz WiFi 네트워크
 ┌──────────────────────────────────────────────┐
 │                                              │
-│   dk-server (WSL2)        ESP32-S3           │
-│   192.168.0.x:8100        192.168.0.y        │
-│         │                      │             │
-│   시작 시 LAN IP 출력     dk_wifi.h에 IP 설정  │
+│   dk-server (WSL2/Windows)   ESP32-S3        │
+│   0.0.0.0:8100               WiFi STA       │
+│   mDNS: dk-server.local      mDNS resolve   │
+│                                              │
+│   dk-web (WSL2)              BLE 연결        │
+│   127.0.0.1:8000             WSL2 USB pass   │
 │                                              │
 └──────────────────────────────────────────────┘
 ```
 
-- **mDNS**: dk-server 시작 시 `zeroconf`로 `dk-server.local` 광고, ESP32는 `mdns` 컴포넌트로 해석
-- **IP 고정 불필요**: DHCP IP가 바뀌어도 `.local` 호스트명으로 자동 추적
-- **dk-server는 Windows에서 실행** (WSL2의 NAT 문제 회피)
-- **2.4GHz 필수**: ESP32-S3는 5GHz WiFi 미지원. 공유기에서 2.4GHz 밴드 활성화 필요
-- **포트**: dk-server는 `0.0.0.0:8100`에 바인드 (같은 네트워크의 모든 장치에서 접근 가능)
-- **브라우저**: Windows에서는 `http://localhost:8100`으로 접근
-
----
-
-## API 레퍼런스
-
-### dk-server (:8100)
-
-| Method | Path | 설명 |
-|--------|------|------|
-| POST | `/api/vehicles/{id}/keys` | 키 생성 (account, role, expires_at) |
-| GET | `/api/vehicles/{id}/keys/{kid}/private` | Private key PEM 다운로드 |
-| DELETE | `/api/vehicles/{id}/keys/{kid}` | 키 삭제 |
-| GET | `/api/provision/{ble_address}` | ESP32용 — public key 목록 |
-| POST | `/api/vehicles/{id}/share` | 다른 계정에 차량 공유 |
-| GET | `/api/vehicles?account=X` | 계정별 차량 필터링 |
-| GET | `/api/accounts/{name}/keys` | 계정의 모든 키 조회 |
-
-### 기존 API (변경 없음)
-
-| Method | Path | 설명 |
-|--------|------|------|
-| POST | `/api/login` | PIN 로그인 |
-| GET/POST/DELETE | `/api/accounts` | 계정 CRUD |
-| GET/POST/DELETE | `/api/vehicles` | 차량 CRUD |
-| GET/POST | `/api/events` | 이벤트 로그 |
+- **mDNS**: dk-server → `dk-server.local` 광고, ESP32 → mDNS로 해석
+- **2.4GHz 필수**: ESP32-S3는 5GHz 미지원
+- **dk-web BLE**: WSL2에서 Bluetooth USB passthrough 필요 (`scripts/wsl-bluetooth.ps1`)

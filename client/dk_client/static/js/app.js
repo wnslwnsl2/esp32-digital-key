@@ -32,7 +32,6 @@ const el = {
   statusRssi: document.getElementById('status-rssi'),
   statusLock: document.getElementById('status-lock'),
   statusRegKeys: document.getElementById('status-reg-keys'),
-  statusPendKeys: document.getElementById('status-pend-keys'),
   infoAccount: document.getElementById('info-account'),
   infoVehicle: document.getElementById('info-vehicle'),
   infoRole: document.getElementById('info-role'),
@@ -185,6 +184,29 @@ function displayInfo(data) {
 
   // Show share button only for owners
   document.getElementById('share-row').style.display = isOwner ? '' : 'none';
+
+  // Show shared keys for owners
+  const sharedKeysSection = document.getElementById('shared-keys-section');
+  const sharedKeysList = document.getElementById('shared-keys-list');
+  if (isOwner) {
+    const sharedKeys = keys.filter(k => k.account !== currentAccount);
+    if (sharedKeys.length > 0) {
+      sharedKeysSection.style.display = '';
+      sharedKeysList.innerHTML = sharedKeys.map(k => {
+        const expiry = k.expires_at ? ` · expires ${k.expires_at}` : '';
+        return `<div class="shared-key-item">
+          <span>${esc(k.account)} <span class="role-badge ${k.role}">${k.role}</span>${expiry}</span>
+          <button class="btn btn-sm btn-revoke" onclick="revokeSharedKey('${esc(k.key_id)}')" title="Revoke key">&times;</button>
+        </div>`;
+      }).join('');
+    } else {
+      sharedKeysSection.style.display = 'none';
+      sharedKeysList.innerHTML = '';
+    }
+  } else {
+    sharedKeysSection.style.display = 'none';
+    sharedKeysList.innerHTML = '';
+  }
 }
 
 // --- Auto-scan ---
@@ -298,7 +320,6 @@ function updateStatus(data) {
   }
 
   if (data.registered_keys !== undefined) el.statusRegKeys.textContent = data.registered_keys;
-  if (data.pending_keys !== undefined) el.statusPendKeys.textContent = data.pending_keys;
 }
 
 // --- Log ---
@@ -323,6 +344,36 @@ async function logout() {
   clearProgress();
   sessionStorage.removeItem('dk_user');
   window.location.href = '/login';
+}
+
+// --- Shared Keys Management ---
+
+async function refreshVehicleInfo() {
+  try {
+    const res = await fetch('/api/my-vehicles');
+    if (!res.ok) return;
+    const vehicles = await res.json();
+    displayInfo({ account: currentAccount, vehicles });
+  } catch { /* ignore */ }
+}
+
+async function revokeSharedKey(keyId) {
+  if (!currentVehicleId) return;
+  if (!confirm('Revoke this shared key?')) return;
+  try {
+    const res = await fetch(`/api/vehicles/${currentVehicleId}/keys/${keyId}`, {
+      method: 'DELETE',
+    });
+    if (res.ok) {
+      appendLog('INFO', 'Shared key revoked');
+      await refreshVehicleInfo();
+    } else {
+      const data = await res.json();
+      appendLog('ERROR', data.error || 'Revoke failed');
+    }
+  } catch (e) {
+    appendLog('ERROR', 'Revoke failed: ' + e.message);
+  }
 }
 
 // --- Share ---
@@ -374,6 +425,7 @@ async function submitShare() {
     if (res.ok) {
       appendLog('INFO', `Shared vehicle with ${account} (${role})`);
       hideShareModal();
+      await refreshVehicleInfo();
     } else {
       alert(data.error || 'Share failed');
     }

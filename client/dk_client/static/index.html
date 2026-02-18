@@ -31,6 +31,12 @@
         <span class="info-label">Key Sharing</span>
         <button class="btn btn-sm btn-primary" onclick="showShareModal()">Share</button>
       </div>
+      <div id="shared-keys-section" style="display: none;">
+        <div class="info-row" style="border-top: none;">
+          <span class="info-label">Shared Keys</span>
+        </div>
+        <div id="shared-keys-list"></div>
+      </div>
     </div>
 
     <!-- Scanning -->
@@ -130,10 +136,6 @@
         <div class="info-item">
           <label>Registered Keys</label>
           <span id="status-reg-keys">-</span>
-        </div>
-        <div class="info-item">
-          <label>Pending Keys</label>
-          <span id="status-pend-keys">-</span>
         </div>
       </div>
     </div>
