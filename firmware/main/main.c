@@ -1,10 +1,12 @@
 #include "dk_auth.h"
 #include "dk_button.h"
+#include "dk_cloud.h"
 #include "dk_keystore.h"
 #include "dk_led.h"
 #include "dk_lock.h"
 #include "dk_proximity.h"
 #include "dk_service.h"
+#include "dk_wifi.h"
 #include "ble_stack.h"
 
 #include "esp_log.h"
@@ -54,6 +56,10 @@ void app_main(void)
     DkKeystore_Init();
     DkLock_Init();
     DkLed_Init();
+
+    /* WiFi + cloud key sync (non-blocking; skips if SSID not configured) */
+    DkWifi_Init();
+    DkCloud_Init();
 
     /* BLE stack + GATT service */
     BleStack_SetConnectCb(on_connect);

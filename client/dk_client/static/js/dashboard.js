@@ -39,6 +39,7 @@ function renderVehicles(vehicles) {
         </div>
         <div>
           <button class="btn-icon" title="Add key" onclick="showAddKey('${v.id}')">🔑</button>
+          <button class="btn-icon" title="Share" onclick="showShare('${v.id}')">👥</button>
           <button class="btn-icon" title="Delete vehicle" onclick="removeVehicle('${v.id}','${esc(v.name)}')">✕</button>
         </div>
       </div>
@@ -49,16 +50,17 @@ function renderVehicles(vehicles) {
 
 function renderKeys(vehicleId, keys) {
   if (!keys || !keys.length) {
-    return '<div class="key-list"><div class="empty-state" style="padding:8px">No keys bound</div></div>';
+    return '<div class="key-list"><div class="empty-state" style="padding:8px">No keys</div></div>';
   }
   return `<div class="key-list">${keys.map(k => `
     <div class="key-item">
       <div class="key-info">
         <span class="key-id">${esc(k.key_id)}</span>
         <span class="key-role ${k.role}">${k.role}</span>
-        ${k.public_key ? `<span class="key-pubkey">${esc(k.public_key.substring(0, 16))}…</span>` : ''}
+        ${k.account ? `<span class="key-account">${esc(k.account)}</span>` : ''}
+        ${k.expires_at ? `<span class="key-expires">exp: ${formatTime(k.expires_at)}</span>` : ''}
       </div>
-      <button class="btn-icon" title="Unbind key" onclick="removeKey('${vehicleId}','${k.key_id}')">✕</button>
+      <button class="btn-icon" title="Remove key" onclick="removeKey('${vehicleId}','${k.key_id}')">✕</button>
     </div>
   `).join('')}</div>`;
 }
@@ -98,6 +100,51 @@ function renderEvents(events) {
   `;
 }
 
+// --- Accounts ---
+let accountList = [];
+
+async function loadAccounts() {
+  const res = await api('GET', '/api/accounts');
+  if (!res) return;
+  const accounts = await res.json();
+  accountList = accounts;
+  const container = document.getElementById('accounts-container');
+  if (!accounts.length) {
+    container.innerHTML = '<div class="empty-state">No accounts</div>';
+    return;
+  }
+  container.innerHTML = accounts.map(a => `
+    <div class="key-item">
+      <div class="key-info">
+        <span class="key-id">${esc(a.name || '(unnamed)')}</span>
+      </div>
+      <button class="btn-icon" title="Delete account" onclick="removeAccount('${esc(a.name)}')">✕</button>
+    </div>
+  `).join('');
+}
+
+function showAddAccount() {
+  document.getElementById('account-name-input').value = '';
+  document.getElementById('account-pin-input').value = '';
+  document.getElementById('add-account-modal').classList.add('active');
+  document.getElementById('account-name-input').focus();
+}
+
+async function addAccount() {
+  const name = document.getElementById('account-name-input').value.trim();
+  const pin = document.getElementById('account-pin-input').value;
+  if (!name || !pin) return alert('Name and PIN required');
+  await api('POST', '/api/accounts', { name, pin });
+  hideModal('add-account-modal');
+  loadAccounts();
+}
+
+async function removeAccount(name) {
+  if (!confirm(`Delete account "${name}"?`)) return;
+  await api('DELETE', `/api/accounts/${encodeURIComponent(name)}`);
+  loadAccounts();
+}
+
 // --- Actions ---
 
 function showAddVehicle() {
@@ -122,57 +169,79 @@ async function removeVehicle(id, name) {
   loadVehicles();
 }
 
-async function showAddKey(vehicleId) {
+// --- Key management ---
+
+function _populateAccountSelect(selectId) {
+  const sel = document.getElementById(selectId);
+  sel.innerHTML = accountList.map(a =>
+    `<option value="${esc(a.name)}">${esc(a.name)}</option>`
+  ).join('');
+}
+
+function toggleExpiry() {
+  const role = document.getElementById('key-role').value;
+  document.getElementById('key-expiry-group').style.display = role === 'guest' ? '' : 'none';
+}
+
+function toggleShareExpiry() {
+  const role = document.getElementById('share-role').value;
+  document.getElementById('share-expiry-group').style.display = role === 'guest' ? '' : 'none';
+}
+
+function showAddKey(vehicleId) {
   document.getElementById('key-vehicle-id').value = vehicleId;
-  document.getElementById('key-id-manual').value = '';
-  document.getElementById('key-pubkey').value = '';
-
-  // Load local keys into select
-  const sel = document.getElementById('key-id-select');
-  sel.innerHTML = '<option value="">Select a local key...</option>';
-  try {
-    const res = await api('GET', '/api/local-keys');
-    if (res) {
-      const keys = await res.json();
-      keys.forEach(k => {
-        const opt = document.createElement('option');
-        opt.value = k.key_id;
-        opt.textContent = k.key_id;
-        sel.appendChild(opt);
-      });
-    }
-  } catch { /* ignore */ }
-
+  document.getElementById('key-role').value = 'owner';
+  document.getElementById('key-expires').value = '';
+  toggleExpiry();
+  _populateAccountSelect('key-account');
   document.getElementById('add-key-modal').classList.add('active');
 }
 
 async function addKey() {
   const vehicleId = document.getElementById('key-vehicle-id').value;
-  const selected = document.getElementById('key-id-select').value;
-  const manual = document.getElementById('key-id-manual').value.trim();
-  const key_id = manual || selected;
-  const public_key = document.getElementById('key-pubkey').value.trim();
+  const account = document.getElementById('key-account').value;
   const role = document.getElementById('key-role').value;
+  const expires_at = document.getElementById('key-expires').value || '';
 
-  if (!key_id) return alert('Select or enter a Key ID');
-  await api('POST', `/api/vehicles/${vehicleId}/keys`, { key_id, public_key, role });
+  if (!account) return alert('Select an account');
+  await api('POST', `/api/vehicles/${vehicleId}/keys`, { account, role, expires_at });
   hideModal('add-key-modal');
   loadVehicles();
 }
 
 async function removeKey(vehicleId, keyId) {
-  if (!confirm(`Unbind key "${keyId}"?`)) return;
+  if (!confirm(`Remove key "${keyId}"?`)) return;
   await api('DELETE', `/api/vehicles/${vehicleId}/keys/${keyId}`);
   loadVehicles();
 }
 
-function hideModal(id) {
-  document.getElementById(id).classList.remove('active');
+// --- Share ---
+
+function showShare(vehicleId) {
+  document.getElementById('share-vehicle-id').value = vehicleId;
+  document.getElementById('share-role').value = 'family';
+  document.getElementById('share-expires').value = '';
+  toggleShareExpiry();
+  _populateAccountSelect('share-account');
+  document.getElementById('share-modal').classList.add('active');
 }
 
-async function logout() {
-  await api('POST', '/api/logout');
-  window.location.href = '/login';
+async function shareVehicle() {
+  const vehicleId = document.getElementById('share-vehicle-id').value;
+  const account = document.getElementById('share-account').value;
+  const role = document.getElementById('share-role').value;
+  const expires_at = document.getElementById('share-expires').value || '';
+
+  if (!account) return alert('Select an account');
+  await api('POST', `/api/vehicles/${vehicleId}/share`, { account, role, expires_at });
+  hideModal('share-modal');
+  loadVehicles();
+}
+
+// --- Modal helpers ---
+
+function hideModal(id) {
+  document.getElementById(id).classList.remove('active');
 }
 
 // --- Helpers ---
@@ -203,6 +272,10 @@ document.querySelectorAll('.modal-overlay').forEach(el => {
 });
 
 // --- Init ---
-loadVehicles();
-loadEvents();
-setInterval(loadEvents, 5000);
+async function init() {
+  await loadAccounts();
+  await loadVehicles();
+  loadEvents();
+  setInterval(loadEvents, 5000);
+}
+init();

@@ -21,8 +21,8 @@ DK_SERVER_URL = os.environ.get("DK_SERVER_URL", "http://localhost:8100")
 
 SESSION_COOKIE = "dk_web_session"
 
-# In-memory session store
-_sessions: set[str] = set()
+# In-memory session store: token -> account name
+_sessions: dict[str, str] = {}
 
 # Paths that don't require authentication
 PUBLIC_PATHS = {"/login", "/api/login"}
@@ -31,6 +31,11 @@ PUBLIC_PREFIXES = ("/static/",)
 
 def validate_session(token: str) -> bool:
     return token in _sessions
+
+
+def get_session_name(token: str) -> str:
+    """Return account name for a session token, or empty string."""
+    return _sessions.get(token, "")
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -130,8 +135,9 @@ async def api_login(request: Request):
             )
         if resp.status_code == 200:
             token = secrets.token_hex(32)
-            _sessions.add(token)
-            response = JSONResponse({"ok": True})
+            name = resp.json().get("name", "")
+            _sessions[token] = name
+            response = JSONResponse({"ok": True, "name": name})
             response.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="lax")
             return response
         else:
@@ -148,7 +154,7 @@ async def api_login(request: Request):
 async def api_logout(request: Request):
     token = request.cookies.get(SESSION_COOKIE)
     if token:
-        _sessions.discard(token)
+        _sessions.pop(token, None)
     resp = JSONResponse({"ok": True})
     resp.delete_cookie(SESSION_COOKIE)
     return resp

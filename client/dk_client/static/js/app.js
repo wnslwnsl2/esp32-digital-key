@@ -38,6 +38,12 @@ const elements = {
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
+  // Display user name from login
+  const userName = sessionStorage.getItem('dk_user');
+  if (userName) {
+    document.getElementById('user-name').textContent = userName;
+  }
+
   initWebSocket();
   initEventListeners();
   appendLog('INFO', 'Digital Key Web UI started');
@@ -370,6 +376,7 @@ async function logout() {
   try {
     await fetch('/api/logout', { method: 'POST' });
   } catch { /* ignore */ }
+  sessionStorage.removeItem('dk_user');
   window.location.href = '/login';
 }
 

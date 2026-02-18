@@ -84,7 +84,17 @@
       font-weight: 500;
     }
     .key-role.owner { background: #dbeafe; color: #1d4ed8; }
+    .key-role.family { background: #e0e7ff; color: #4338ca; }
+    .key-role.guest { background: #fef3c7; color: #92400e; }
     .key-role.user { background: #e5e7eb; color: #374151; }
+    .key-account {
+      font-size: 11px;
+      color: var(--color-text-secondary);
+    }
+    .key-expires {
+      font-size: 10px;
+      color: #92400e;
+    }
     .key-pubkey {
       font-family: monospace;
       font-size: 11px;
@@ -197,7 +207,17 @@
   <div class="container">
     <div class="dashboard-header">
       <h1>Digital Key Server</h1>
-      <button class="btn-sm btn-outline" onclick="logout()">Logout</button>
+    </div>
+
+    <!-- Accounts Section -->
+    <div class="card">
+      <div class="section-header">
+        <h2>Accounts</h2>
+        <button class="btn-sm btn-primary" onclick="showAddAccount()">+ Add</button>
+      </div>
+      <div id="accounts-container">
+        <div class="empty-state">No accounts</div>
+      </div>
     </div>
 
     <!-- Vehicles Section -->
@@ -247,32 +267,73 @@
   <!-- Add Key Modal -->
   <div class="modal-overlay" id="add-key-modal">
     <div class="modal">
-      <h3>Bind Key</h3>
+      <h3>Add Key</h3>
       <input type="hidden" id="key-vehicle-id">
       <div class="form-group">
-        <label>Key ID</label>
-        <select id="key-id-select">
-          <option value="">Select a local key...</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Or enter Key ID manually</label>
-        <input type="text" id="key-id-manual" placeholder="16-char hex">
-      </div>
-      <div class="form-group">
-        <label>Public Key (hex, optional)</label>
-        <input type="text" id="key-pubkey" placeholder="04ab...">
+        <label>Account</label>
+        <select id="key-account"></select>
       </div>
       <div class="form-group">
         <label>Role</label>
-        <select id="key-role">
+        <select id="key-role" onchange="toggleExpiry()">
           <option value="owner">Owner</option>
-          <option value="user" selected>User</option>
+          <option value="family">Family</option>
+          <option value="guest">Guest</option>
         </select>
+      </div>
+      <div class="form-group" id="key-expiry-group" style="display:none">
+        <label>Expires at</label>
+        <input type="datetime-local" id="key-expires">
       </div>
       <div class="modal-actions">
         <button class="btn-sm btn-outline" onclick="hideModal('add-key-modal')">Cancel</button>
-        <button class="btn-sm btn-primary" onclick="addKey()">Bind</button>
+        <button class="btn-sm btn-primary" onclick="addKey()">Create Key</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Share Vehicle Modal -->
+  <div class="modal-overlay" id="share-modal">
+    <div class="modal">
+      <h3>Share Vehicle</h3>
+      <input type="hidden" id="share-vehicle-id">
+      <div class="form-group">
+        <label>Account</label>
+        <select id="share-account"></select>
+      </div>
+      <div class="form-group">
+        <label>Role</label>
+        <select id="share-role" onchange="toggleShareExpiry()">
+          <option value="family" selected>Family</option>
+          <option value="guest">Guest</option>
+        </select>
+      </div>
+      <div class="form-group" id="share-expiry-group" style="display:none">
+        <label>Expires at</label>
+        <input type="datetime-local" id="share-expires">
+      </div>
+      <div class="modal-actions">
+        <button class="btn-sm btn-outline" onclick="hideModal('share-modal')">Cancel</button>
+        <button class="btn-sm btn-primary" onclick="shareVehicle()">Share</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Account Modal -->
+  <div class="modal-overlay" id="add-account-modal">
+    <div class="modal">
+      <h3>Add Account</h3>
+      <div class="form-group">
+        <label>Name</label>
+        <input type="text" id="account-name-input" placeholder="Name">
+      </div>
+      <div class="form-group">
+        <label>PIN</label>
+        <input type="password" id="account-pin-input" inputmode="numeric" placeholder="PIN">
+      </div>
+      <div class="modal-actions">
+        <button class="btn-sm btn-outline" onclick="hideModal('add-account-modal')">Cancel</button>
+        <button class="btn-sm btn-primary" onclick="addAccount()">Add</button>
       </div>
     </div>
   </div>

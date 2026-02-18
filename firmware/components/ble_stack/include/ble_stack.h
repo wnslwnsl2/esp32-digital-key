@@ -34,3 +34,11 @@ typedef void (*ble_stack_subscribe_cb_t)(uint16_t conn_handle,
 void BleStack_SetConnectCb(ble_stack_connect_cb_t cb);
 void BleStack_SetDisconnectCb(ble_stack_disconnect_cb_t cb);
 void BleStack_SetSubscribeCb(ble_stack_subscribe_cb_t cb);
+
+/**
+ * Get the BLE address as a string "XX:XX:XX:XX:XX:XX".
+ * Only valid after BleStack_Init() and stack sync.
+ * @param buf  Output buffer (at least 18 bytes)
+ * @param len  Buffer size
+ */
+void BleStack_GetAddress(char *buf, size_t len);

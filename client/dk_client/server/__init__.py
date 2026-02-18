@@ -1,10 +1,8 @@
 """Digital Key Web UI server entry point."""
 
-import getpass
 import logging
-import os
+import socket
 import subprocess
-import sys
 import threading
 import time
 import webbrowser
@@ -31,6 +29,46 @@ def setup_logging():
         level=logging.INFO,
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     )
+
+
+MDNS_SERVICE_NAME = "dk-server"
+MDNS_SERVICE_TYPE = "_dk._tcp.local."
+
+
+def _start_mdns():
+    """Advertise dk-server via mDNS so ESP32 can find it as dk-server.local."""
+    try:
+        from zeroconf import ServiceInfo, Zeroconf
+
+        ip = _get_local_ip()
+        info = ServiceInfo(
+            MDNS_SERVICE_TYPE,
+            f"{MDNS_SERVICE_NAME}.{MDNS_SERVICE_TYPE}",
+            addresses=[socket.inet_aton(ip)],
+            port=REG_PORT,
+            properties={"path": "/api/"},
+            server=f"{MDNS_SERVICE_NAME}.local.",
+        )
+        zc = Zeroconf()
+        zc.register_service(info)
+        logging.getLogger(__name__).info(
+            "mDNS: advertising %s.local → %s:%d", MDNS_SERVICE_NAME, ip, REG_PORT)
+        return zc, info
+    except Exception as e:
+        logging.getLogger(__name__).warning("mDNS failed: %s", e)
+        return None, None
+
+
+def _get_local_ip() -> str:
+    """Best-effort local IP detection."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
 
 
 def _open_url(url: str):
@@ -65,35 +103,17 @@ def main():
 
 def start_reg_server():
     """Entry point for dk-server command."""
-    from dk_client.server.auth import is_pin_configured, setup_pin
-
-    # Handle --reset-pin flag
-    if "--reset-pin" in sys.argv:
-        pin = getpass.getpass("New PIN: ")
-        confirm = getpass.getpass("Confirm PIN: ")
-        if pin != confirm:
-            print("PINs do not match.")
-            sys.exit(1)
-        setup_pin(pin)
-        print("PIN reset successfully.")
-        sys.argv.remove("--reset-pin")
-
-    # First-run PIN setup
-    if not is_pin_configured():
-        print("First run — set up a PIN for dk-server.")
-        pin = getpass.getpass("Enter PIN: ")
-        confirm = getpass.getpass("Confirm PIN: ")
-        if pin != confirm:
-            print("PINs do not match.")
-            sys.exit(1)
-        setup_pin(pin)
-        print("PIN configured.")
-
     setup_logging()
+
+    # Advertise via mDNS (dk-server.local)
+    _start_mdns()
 
     from dk_client.server.reg_app import app
 
+    local_ip = _get_local_ip()
     print(f"Digital Key Server running on http://{REG_HOST}:{REG_PORT}")
+    print(f"  LAN:  http://{local_ip}:{REG_PORT}")
+    print(f"  mDNS: http://dk-server.local:{REG_PORT}")
     uvicorn.run(
         app,
         host=REG_HOST,

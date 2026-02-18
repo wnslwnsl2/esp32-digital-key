@@ -5,6 +5,9 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives import serialization
+
 DATA_DIR = Path.home() / ".dk-client"
 VEHICLES_FILE = DATA_DIR / "vehicles.json"
 EVENTS_FILE = DATA_DIR / "events.jsonl"
@@ -67,22 +70,67 @@ def update_vehicle(vehicle_id: str, fields: dict):
 
 # --- Keys ---
 
-def add_key(vehicle_id: str, key_id: str, public_key: str, role: str):
+def _generate_keypair() -> tuple[str, str, str]:
+    """Generate an ECC P-256 keypair. Returns (key_id, public_key_hex, private_key_pem)."""
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    public_key_bytes = private_key.public_key().public_bytes(
+        serialization.Encoding.X962,
+        serialization.PublicFormat.UncompressedPoint,
+    )
+    private_pem = private_key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
+    key_id = uuid.uuid4().hex[:16]
+    return key_id, public_key_bytes.hex(), private_pem
+
+
+def add_key(vehicle_id: str, key_id: str, public_key: str, role: str,
+            account: str = "", private_key: str = "", expires_at: str | None = None):
     vehicles = load_vehicles()
     for v in vehicles:
         if v["id"] == vehicle_id:
             # Avoid duplicate key_id
             if any(k["key_id"] == key_id for k in v["keys"]):
                 raise ValueError(f"Key {key_id} already bound to this vehicle")
-            v["keys"].append({
+            entry = {
                 "key_id": key_id,
                 "public_key": public_key,
                 "role": role,
+                "account": account,
                 "created_at": datetime.now().isoformat(),
-            })
+            }
+            if private_key:
+                entry["private_key"] = private_key
+            if expires_at:
+                entry["expires_at"] = expires_at
+            v["keys"].append(entry)
             save_vehicles(vehicles)
             return
     raise ValueError(f"Vehicle {vehicle_id} not found")
+
+
+def get_key(vehicle_id: str, key_id: str) -> dict | None:
+    """Get a specific key from a vehicle."""
+    v = get_vehicle(vehicle_id)
+    if not v:
+        return None
+    for k in v.get("keys", []):
+        if k["key_id"] == key_id:
+            return k
+    return None
+
+
+def get_keys_for_account(account: str) -> list[dict]:
+    """Get all keys across all vehicles that belong to an account."""
+    results = []
+    for v in load_vehicles():
+        for k in v.get("keys", []):
+            if k.get("account") == account:
+                results.append({**k, "vehicle_id": v["id"], "vehicle_name": v["name"],
+                                "ble_address": v["ble_address"]})
+    return results
 
 
 def delete_key(vehicle_id: str, key_id: str):

@@ -31,6 +31,13 @@ void BleStack_SetConnectCb(ble_stack_connect_cb_t cb)    { s_on_connect = cb; }
 void BleStack_SetDisconnectCb(ble_stack_disconnect_cb_t cb) { s_on_disconnect = cb; }
 void BleStack_SetSubscribeCb(ble_stack_subscribe_cb_t cb) { s_on_subscribe = cb; }
 
+void BleStack_GetAddress(char *buf, size_t len)
+{
+    snprintf(buf, len, "%02X:%02X:%02X:%02X:%02X:%02X",
+             s_addr_val[5], s_addr_val[4], s_addr_val[3],
+             s_addr_val[2], s_addr_val[1], s_addr_val[0]);
+}
+
 /* ── Advertising ─────────────────────────────────────────── */
 
 void BleStack_StartAdvertising(void)

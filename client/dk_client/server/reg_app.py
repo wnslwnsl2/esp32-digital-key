@@ -9,15 +9,35 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 
-from dk_client.server.auth import verify_pin
+from dk_client.server.auth import (
+    add_account,
+    delete_account,
+    get_accounts,
+    verify_pin,
+)
+
+
+class NoCacheMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith("/static"):
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        return response
+
+
 from dk_client.server.store import (
+    _generate_keypair,
     add_key,
     add_vehicle,
     append_event,
     delete_key,
     delete_vehicle,
     get_events,
+    get_key,
+    get_keys_for_account,
+    get_vehicle,
     list_local_keys,
     load_vehicles,
     update_vehicle,
@@ -26,6 +46,7 @@ from dk_client.server.store import (
 STATIC_DIR = Path(__file__).parent.parent / "static"
 
 app = FastAPI(title="Digital Key Server", version="0.1.0")
+app.add_middleware(NoCacheMiddleware)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
@@ -42,16 +63,49 @@ async def dashboard_page():
 async def api_login(request: Request):
     body = await request.json()
     pin = body.get("pin", "")
-    if not verify_pin(pin):
+    name = verify_pin(pin)
+    if name is None:
         return JSONResponse({"error": "invalid PIN"}, status_code=403)
-    return JSONResponse({"ok": True})
+    return JSONResponse({"ok": True, "name": name})
+
+
+# --- Account API ---
+
+@app.get("/api/accounts")
+async def api_accounts():
+    return get_accounts()
+
+
+@app.post("/api/accounts")
+async def api_add_account(request: Request):
+    body = await request.json()
+    name = body.get("name", "").strip()
+    pin = body.get("pin", "").strip()
+    if not name or not pin:
+        return JSONResponse({"error": "name and pin required"}, status_code=400)
+    add_account(pin, name)
+    return {"ok": True}
+
+
+@app.delete("/api/accounts/{name}")
+async def api_delete_account(name: str):
+    if not delete_account(name):
+        return JSONResponse({"error": "account not found"}, status_code=404)
+    return {"ok": True}
 
 
 # --- Vehicles API ---
 
 @app.get("/api/vehicles")
-async def api_get_vehicles():
-    return load_vehicles()
+async def api_get_vehicles(owner: str = "", account: str = ""):
+    vehicles = load_vehicles()
+    if owner:
+        vehicles = [v for v in vehicles if v.get("owner", "") == owner]
+    if account:
+        # Filter to vehicles where this account has at least one key
+        vehicles = [v for v in vehicles
+                    if any(k.get("account") == account for k in v.get("keys", []))]
+    return vehicles
 
 
 @app.post("/api/vehicles")
@@ -86,16 +140,32 @@ async def api_update_vehicle(vehicle_id: str, request: Request):
 @app.post("/api/vehicles/{vehicle_id}/keys")
 async def api_add_key(vehicle_id: str, request: Request):
     body = await request.json()
-    key_id = body.get("key_id", "").strip()
-    public_key = body.get("public_key", "").strip()
+    account = body.get("account", "").strip()
     role = body.get("role", "user").strip()
-    if not key_id:
-        return JSONResponse({"error": "key_id required"}, status_code=400)
+    expires_at = body.get("expires_at", "").strip() or None
+    if not account:
+        return JSONResponse({"error": "account required"}, status_code=400)
+
+    # Auto-generate keypair
+    key_id, public_key, private_key = _generate_keypair()
     try:
-        add_key(vehicle_id, key_id, public_key, role)
+        add_key(vehicle_id, key_id, public_key, role,
+                account=account, private_key=private_key, expires_at=expires_at)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
-    return {"ok": True}
+    return {"ok": True, "key_id": key_id}
+
+
+@app.get("/api/vehicles/{vehicle_id}/keys/{key_id}/private")
+async def api_get_private_key(vehicle_id: str, key_id: str):
+    """Return private key PEM for dk-web to download."""
+    k = get_key(vehicle_id, key_id)
+    if not k:
+        return JSONResponse({"error": "key not found"}, status_code=404)
+    pem = k.get("private_key", "")
+    if not pem:
+        return JSONResponse({"error": "no private key"}, status_code=404)
+    return {"key_id": key_id, "private_key": pem, "public_key": k.get("public_key", "")}
 
 
 @app.delete("/api/vehicles/{vehicle_id}/keys/{key_id}")
@@ -105,6 +175,53 @@ async def api_delete_key(vehicle_id: str, key_id: str):
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return {"ok": True}
+
+
+# --- Provision API (ESP32 calls this via WiFi) ---
+
+@app.get("/api/provision/{ble_address}")
+async def api_provision(ble_address: str):
+    """Return approved public keys for a vehicle identified by BLE address."""
+    addr_upper = ble_address.upper()
+    for v in load_vehicles():
+        if v.get("ble_address", "").upper() == addr_upper:
+            keys = []
+            for k in v.get("keys", []):
+                keys.append({
+                    "key_id": k["key_id"],
+                    "public_key": k.get("public_key", ""),
+                })
+            return {"vehicle_id": v["id"], "keys": keys}
+    return {"vehicle_id": None, "keys": []}
+
+
+# --- Share API ---
+
+@app.post("/api/vehicles/{vehicle_id}/share")
+async def api_share_vehicle(vehicle_id: str, request: Request):
+    """Share a vehicle by creating a new key for another account."""
+    body = await request.json()
+    account = body.get("account", "").strip()
+    role = body.get("role", "family").strip()
+    expires_at = body.get("expires_at", "").strip() or None
+    if not account:
+        return JSONResponse({"error": "account required"}, status_code=400)
+
+    key_id, public_key, private_key = _generate_keypair()
+    try:
+        add_key(vehicle_id, key_id, public_key, role,
+                account=account, private_key=private_key, expires_at=expires_at)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True, "key_id": key_id}
+
+
+# --- Account keys API ---
+
+@app.get("/api/accounts/{name}/keys")
+async def api_account_keys(name: str):
+    """Get all keys belonging to an account across all vehicles."""
+    return get_keys_for_account(name)
 
 
 # --- Events API ---

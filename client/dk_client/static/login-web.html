@@ -77,6 +77,8 @@
           body: JSON.stringify({ pin }),
         });
         if (res.ok) {
+          const data = await res.json().catch(() => ({}));
+          if (data.name) sessionStorage.setItem('dk_user', data.name);
           window.location.href = '/';
         } else {
           const data = await res.json().catch(() => ({}));

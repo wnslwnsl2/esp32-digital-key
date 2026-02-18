@@ -17,24 +17,63 @@ def _ensure_dir():
     PIN_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 
-def is_pin_configured() -> bool:
-    return PIN_FILE.exists()
+def _load_accounts() -> list[dict]:
+    """Load accounts list (handles legacy single-object format)."""
+    if not PIN_FILE.exists():
+        return []
+    raw = json.loads(PIN_FILE.read_text())
+    if isinstance(raw, dict):
+        return [raw]
+    return raw
 
 
-def setup_pin(pin: str):
-    """Hash PIN with random salt and save to file."""
+def _save_accounts(accounts: list[dict]):
     _ensure_dir()
+    PIN_FILE.write_text(json.dumps(accounts, indent=2, ensure_ascii=False))
+
+
+def is_pin_configured() -> bool:
+    return len(_load_accounts()) > 0
+
+
+def add_account(pin: str, name: str):
+    """Add a new account with PIN and name."""
+    accounts = _load_accounts()
     salt = os.urandom(16).hex()
     h = hashlib.sha256((salt + pin).encode()).hexdigest()
-    PIN_FILE.write_text(json.dumps({"salt": salt, "hash": h}))
+    accounts.append({"salt": salt, "hash": h, "name": name})
+    _save_accounts(accounts)
 
 
-def verify_pin(pin: str) -> bool:
-    if not PIN_FILE.exists():
+def setup_pin(pin: str, name: str = ""):
+    """Reset all accounts and create a single account."""
+    salt = os.urandom(16).hex()
+    h = hashlib.sha256((salt + pin).encode()).hexdigest()
+    _save_accounts([{"salt": salt, "hash": h, "name": name}])
+
+
+def verify_pin(pin: str) -> str | None:
+    """Verify PIN against all accounts. Returns name on success, None on failure."""
+    for account in _load_accounts():
+        h = hashlib.sha256((account["salt"] + pin).encode()).hexdigest()
+        if secrets.compare_digest(h, account["hash"]):
+            return account.get("name", "")
+    return None
+
+
+def get_accounts() -> list[dict]:
+    """Return account list (name only, no secrets)."""
+    return [{"name": a.get("name", "")} for a in _load_accounts()]
+
+
+def delete_account(name: str) -> bool:
+    """Delete account by name. Returns True if found and deleted."""
+    accounts = _load_accounts()
+    filtered = [a for a in accounts if a.get("name", "") != name]
+    if len(filtered) == len(accounts):
         return False
-    data = json.loads(PIN_FILE.read_text())
-    h = hashlib.sha256((data["salt"] + pin).encode()).hexdigest()
-    return secrets.compare_digest(h, data["hash"])
+    _save_accounts(filtered)
+    return True
 
 
 def create_session() -> str:

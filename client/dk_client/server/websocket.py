@@ -32,11 +32,16 @@ async def report_event(vehicle_addr: str, key_id: str, event: str, detail: str =
         pass
 
 
-async def fetch_registered_vehicles() -> list[dict]:
+async def fetch_registered_vehicles(owner: str = "", account: str = "") -> list[dict]:
     """Fetch registered vehicles from dk-server. Returns empty list on failure."""
     try:
+        params = {}
+        if owner:
+            params["owner"] = owner
+        if account:
+            params["account"] = account
         async with httpx.AsyncClient(timeout=3.0) as client:
-            resp = await client.get(f"{DK_SERVER_URL}/api/vehicles")
+            resp = await client.get(f"{DK_SERVER_URL}/api/vehicles", params=params)
             if resp.status_code == 200:
                 return resp.json()
     except Exception:
@@ -44,8 +49,14 @@ async def fetch_registered_vehicles() -> list[dict]:
     return []
 
 
-def _find_key_for_vehicle(address: str, vehicles: list[dict]) -> str | None:
-    """Find a locally-available key_id bound to the vehicle with the given BLE address."""
+def _find_key_for_vehicle(address: str, vehicles: list[dict],
+                           account: str = "") -> tuple[str | None, str | None]:
+    """Find a key_id bound to the vehicle for the given account.
+
+    Returns (key_id, vehicle_id) or (None, None).
+    If account is given, only keys belonging to that account are considered.
+    Falls back to local PEM discovery if no account match.
+    """
     from dk_client.crypto import get_key_dir
 
     key_dir = get_key_dir()
@@ -53,11 +64,19 @@ def _find_key_for_vehicle(address: str, vehicles: list[dict]) -> str | None:
 
     for v in vehicles:
         if v.get("ble_address", "").upper() == addr_upper:
+            vid = v.get("id", "")
+            # Prefer account-matched keys (cloud keys)
+            if account:
+                for k in v.get("keys", []):
+                    kid = k.get("key_id", "")
+                    if kid and k.get("account") == account:
+                        return kid, vid
+            # Fallback: local PEM keys
             for k in v.get("keys", []):
                 kid = k.get("key_id", "")
                 if kid and (key_dir / f"{kid}.pem").exists():
-                    return kid
-    return None
+                    return kid, vid
+    return None, None
 
 
 def _get_device_pubkey(address: str, vehicles: list[dict]) -> str | None:
@@ -95,6 +114,24 @@ from dk_client.crypto import (
     load_or_create_key, get_public_key_bytes, sign_challenge,
     verify_device_signature,
 )
+
+
+async def _fetch_private_key(vehicle_id: str, key_id: str):
+    """Download private key PEM from dk-server and return a loaded EC private key."""
+    from cryptography.hazmat.primitives.serialization import load_pem_private_key
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                f"{DK_SERVER_URL}/api/vehicles/{vehicle_id}/keys/{key_id}/private")
+            if resp.status_code == 200:
+                data = resp.json()
+                pem = data.get("private_key", "")
+                if pem:
+                    return load_pem_private_key(pem.encode(), password=None)
+    except Exception as e:
+        logger.warning("Failed to fetch private key from server: %s", e)
+    return None
 from dk_client.protocol import (
     AUTH_NAMES,
     CHR_AUTH_STATE,
@@ -114,8 +151,8 @@ from dk_client.protocol import (
 
 router = APIRouter()
 
-# Connected WebSocket clients: client_id -> WebSocket
-clients: dict[str, WebSocket] = {}
+# Connected WebSocket clients: client_id -> (WebSocket, owner_name)
+clients: dict[str, tuple[WebSocket, str]] = {}
 
 # Shared BLE state
 ble_client: Optional[DkBleClient] = None
@@ -129,7 +166,7 @@ async def broadcast(message: dict):
         return
     text = json.dumps(message)
     disconnected = []
-    for client_id, ws in clients.items():
+    for client_id, (ws, _owner) in clients.items():
         try:
             await ws.send_text(text)
         except Exception:
@@ -139,12 +176,17 @@ async def broadcast(message: dict):
 
 
 async def send_to_client(client_id: str, message: dict):
-    ws = clients.get(client_id)
-    if ws:
+    entry = clients.get(client_id)
+    if entry:
         try:
-            await ws.send_text(json.dumps(message))
+            await entry[0].send_text(json.dumps(message))
         except Exception:
             pass
+
+
+def get_client_owner(client_id: str) -> str:
+    entry = clients.get(client_id)
+    return entry[1] if entry else ""
 
 
 async def broadcast_log(level: str, message: str):
@@ -195,7 +237,7 @@ async def status_update_loop():
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     # Check session cookie before accepting
-    from dk_client.server.app import validate_session, SESSION_COOKIE
+    from dk_client.server.app import validate_session, get_session_name, SESSION_COOKIE
 
     token = websocket.cookies.get(SESSION_COOKIE)
     if not token or not validate_session(token):
@@ -203,17 +245,19 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.close(code=4401, reason="unauthorized")
         return
 
+    session_owner = get_session_name(token)
+
     await websocket.accept()
 
     client_id = str(uuid.uuid4())[:8]
-    clients[client_id] = websocket
+    clients[client_id] = (websocket, session_owner)
 
     # Subscribe to status notifications if already connected
     await _ensure_status_subscription()
 
     try:
-        # Send initial state (including registered vehicles from dk-server)
-        reg_vehicles = await fetch_registered_vehicles()
+        # Send initial state (filtered by logged-in user's account)
+        reg_vehicles = await fetch_registered_vehicles(account=session_owner)
         await send_to_client(client_id, {
             "type": "init",
             "data": {
@@ -306,7 +350,8 @@ async def handle_ws_message(client_id: str, msg: dict):
         await _connect_and_auth(client_id, address)
 
     elif msg_type == "fetch_vehicles":
-        vehicles = await fetch_registered_vehicles()
+        owner = get_client_owner(client_id)
+        vehicles = await fetch_registered_vehicles(account=owner)
         await send_to_client(client_id, {
             "type": "registered_vehicles",
             "data": vehicles,
@@ -373,8 +418,10 @@ async def _connect_and_auth(client_id: str, address: str):
     await broadcast_status()
 
     # Step 2: Provision — only allowed if key is bound in dk-server
+    session_owner = get_client_owner(client_id)
     reg_vehicles = await fetch_registered_vehicles()
-    bound_key_id = _find_key_for_vehicle(address, reg_vehicles) if reg_vehicles else None
+    bound_key_id, vehicle_id = _find_key_for_vehicle(
+        address, reg_vehicles, account=session_owner) if reg_vehicles else (None, None)
 
     if not bound_key_id:
         await _broadcast_progress("provision", "failed", "Not authorized")
@@ -385,8 +432,19 @@ async def _connect_and_auth(client_id: str, address: str):
         await broadcast_status()
         return
 
-    key_id, pk = load_or_create_key(key_id=bound_key_id)
-    await broadcast_log("INFO", f"Authorized key: {key_id}")
+    # Try to load private key from dk-server (cloud key)
+    pk = None
+    if vehicle_id:
+        pk = await _fetch_private_key(vehicle_id, bound_key_id)
+        if pk:
+            await broadcast_log("INFO", f"Using cloud key: {bound_key_id}")
+
+    # Fallback to local PEM
+    if pk is None:
+        bound_key_id, pk = load_or_create_key(key_id=bound_key_id)
+        await broadcast_log("INFO", f"Using local key: {bound_key_id}")
+
+    key_id = bound_key_id
     pubkey = get_public_key_bytes(pk)
 
     await _broadcast_progress("provision", "in_progress", key_id)
