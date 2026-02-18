@@ -82,10 +82,10 @@ def verify_device_signature(device_pubkey_bytes: bytes, challenge: bytes, signat
     from cryptography.exceptions import InvalidSignature
 
     pubkey = ec.EllipticCurvePublicKey.from_encoded_point(
-        ec.SECP256R1(), device_pubkey_bytes
+        ec.SECP256R1(), bytes(device_pubkey_bytes)
     )
     try:
-        pubkey.verify(signature, challenge, ec.ECDSA(hashes.SHA256()))
+        pubkey.verify(bytes(signature), bytes(challenge), ec.ECDSA(hashes.SHA256()))
         return True
     except InvalidSignature:
         return False

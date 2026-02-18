@@ -1,23 +1,24 @@
 /**
- * Digital Key Web UI
+ * Digital Key Web UI — Auto-scan & connect
  */
 
-// State
 let ws = null;
 let clientId = null;
 let connected = false;
-let devices = [];
-let registeredVehicles = [];
 let stepStartTimes = {};
 
-// DOM Elements
-const elements = {
-  deviceSelect: document.getElementById('device-select'),
-  btnScan: document.getElementById('btn-scan'),
-  btnConnect: document.getElementById('btn-connect'),
-  connectProgress: document.getElementById('connect-progress'),
+const STEP_IDS = ['connect', 'auth', 'device_auth', 'subscribe'];
+const STEP_EL_KEYS = ['stepConnect', 'stepAuth', 'stepDeviceAuth', 'stepSubscribe'];
+const STORAGE_KEY = 'dk_progress';
+
+const el = {
+  cardScanning: document.getElementById('card-scanning'),
+  cardProgress: document.getElementById('card-progress'),
+  cardLock: document.getElementById('card-lock'),
+  cardStatus: document.getElementById('card-status'),
+  scanText: document.getElementById('scan-text'),
+  scanDetail: document.getElementById('scan-detail'),
   stepConnect: document.getElementById('step-connect'),
-  stepProvision: document.getElementById('step-provision'),
   stepAuth: document.getElementById('step-auth'),
   stepDeviceAuth: document.getElementById('step-device_auth'),
   stepSubscribe: document.getElementById('step-subscribe'),
@@ -29,52 +30,82 @@ const elements = {
   statusLock: document.getElementById('status-lock'),
   statusRegKeys: document.getElementById('status-reg-keys'),
   statusPendKeys: document.getElementById('status-pend-keys'),
-  keyIdInput: document.getElementById('key-id-input'),
-  btnApprove: document.getElementById('btn-approve'),
-  btnDelete: document.getElementById('btn-delete'),
-  btnRefreshVehicles: document.getElementById('btn-refresh-vehicles'),
+  infoAccount: document.getElementById('info-account'),
+  infoVehicle: document.getElementById('info-vehicle'),
+  infoRole: document.getElementById('info-role'),
   logContainer: document.getElementById('log-container'),
 };
 
-// Initialize
-document.addEventListener('DOMContentLoaded', () => {
-  // Display user name from login
-  const userName = sessionStorage.getItem('dk_user');
-  if (userName) {
-    document.getElementById('user-name').textContent = userName;
-  }
+// --- sessionStorage persistence ---
 
+function saveProgress() {
+  sessionStorage.setItem(STORAGE_KEY, JSON.stringify(savedSteps));
+}
+
+// { connect: {status, detail, elapsed}, auth: {...}, ... }
+let savedSteps = {};
+
+function loadProgress() {
+  try {
+    const raw = sessionStorage.getItem(STORAGE_KEY);
+    if (raw) savedSteps = JSON.parse(raw);
+  } catch { savedSteps = {}; }
+}
+
+function clearProgress() {
+  savedSteps = {};
+  sessionStorage.removeItem(STORAGE_KEY);
+}
+
+function restoreProgressUI() {
+  if (!Object.keys(savedSteps).length) return;
+  STEP_IDS.forEach((id, i) => {
+    const info = savedSteps[id];
+    if (!info) return;
+    const stepEl = el[STEP_EL_KEYS[i]];
+    if (!stepEl) return;
+    applyStepUI(stepEl, info.status, info.detail, info.elapsed);
+  });
+}
+
+function applyStepUI(stepEl, status, detail, elapsed) {
+  stepEl.className = `step ${status}`;
+
+  const detailEl = stepEl.querySelector('.step-detail');
+  if (detailEl) detailEl.textContent = detail || '';
+
+  const timeEl = stepEl.querySelector('.step-time');
+  if (timeEl) timeEl.textContent = elapsed || '';
+
+  const iconEl = stepEl.querySelector('.step-icon');
+  if (iconEl) {
+    if (status === 'done') iconEl.innerHTML = '&#10003;';
+    else if (status === 'failed') iconEl.innerHTML = '&#10007;';
+    else if (status === 'skipped') iconEl.innerHTML = '&#8722;';
+    else iconEl.innerHTML = '&#9679;';
+  }
+}
+
+// --- Initialize ---
+
+document.addEventListener('DOMContentLoaded', () => {
+  loadProgress();
   initWebSocket();
-  initEventListeners();
-  appendLog('INFO', 'Digital Key Web UI started');
 });
 
-// WebSocket
+// --- WebSocket ---
+
 function initWebSocket() {
   ws = new WebSocket(`ws://${location.host}/ws`);
-
-  ws.onopen = () => {
-    appendLog('INFO', 'WebSocket connected');
-  };
-
-  ws.onmessage = (event) => {
-    const msg = JSON.parse(event.data);
-    handleMessage(msg);
-  };
-
+  ws.onopen = () => appendLog('INFO', 'Connected to server');
+  ws.onmessage = (e) => handleMessage(JSON.parse(e.data));
   ws.onclose = (e) => {
-    if (e.code === 4401) {
-      window.location.href = '/login';
-      return;
-    }
-    appendLog('WARNING', 'WebSocket disconnected, reconnecting...');
+    if (e.code === 4401) { window.location.href = '/login'; return; }
+    appendLog('WARNING', 'Server disconnected, reconnecting...');
     clientId = null;
     setTimeout(initWebSocket, 3000);
   };
-
-  ws.onerror = () => {
-    appendLog('ERROR', 'WebSocket error');
-  };
+  ws.onerror = () => appendLog('ERROR', 'WebSocket error');
 }
 
 function sendWs(type, data = {}) {
@@ -87,23 +118,16 @@ function handleMessage(msg) {
   switch (msg.type) {
     case 'init':
       clientId = msg.data.client_id;
-      if (msg.data.registered_vehicles) {
-        registeredVehicles = msg.data.registered_vehicles;
-      }
-      if (msg.data.devices && msg.data.devices.length > 0) {
-        devices = msg.data.devices;
-      }
-      rebuildDeviceSelect();
-      if (msg.data.scanning) {
-        setScanState(true);
-      }
-      appendLog('INFO', `Client ID: ${clientId}`);
+      displayInfo(msg.data);
+      appendLog('INFO', 'Ready');
       break;
 
-    case 'registered_vehicles':
-      registeredVehicles = msg.data || [];
-      rebuildDeviceSelect();
-      appendLog('INFO', `Registered vehicles: ${registeredVehicles.length}`);
+    case 'auto_scan':
+      handleAutoScan(msg.data);
+      break;
+
+    case 'connect_progress':
+      updateProgress(msg.data);
       break;
 
     case 'status':
@@ -114,27 +138,12 @@ function handleMessage(msg) {
       appendLog(msg.data.level, msg.data.message);
       break;
 
-    case 'scan_result':
-      devices = msg.data || [];
-      rebuildDeviceSelect();
-      appendLog('INFO', `${devices.length} device(s) found`);
-      break;
-
-    case 'connect_progress':
-      updateProgress(msg.data);
-      break;
-
     case 'auth_result':
-      // Auth is shown via progress steps, no separate handling needed
-      break;
-
-    case 'scan_state':
-      setScanState(msg.data.scanning);
       break;
 
     case 'command_result':
       if (!msg.data.success) {
-        appendLog('ERROR', `Command failed: ${msg.data.action} - ${msg.data.error || ''}`);
+        appendLog('ERROR', `${msg.data.action} failed: ${msg.data.error || ''}`);
       }
       break;
 
@@ -144,250 +153,175 @@ function handleMessage(msg) {
   }
 }
 
-// Event Listeners
-function initEventListeners() {
-  elements.btnScan.addEventListener('click', scanDevices);
-  elements.btnConnect.addEventListener('click', toggleConnection);
+// --- Account & Vehicle Info ---
 
-  elements.deviceSelect.addEventListener('change', () => {
-    elements.btnConnect.disabled = !elements.deviceSelect.value;
-  });
+function displayInfo(data) {
+  el.infoAccount.textContent = data.account || '-';
 
-  elements.btnRefreshVehicles.addEventListener('click', () => {
-    sendWs('fetch_vehicles');
-  });
+  const vehicles = data.vehicles || [];
+  if (vehicles.length === 0) {
+    el.infoVehicle.textContent = 'None';
+    el.infoRole.textContent = '-';
+    return;
+  }
 
-  elements.btnApprove.addEventListener('click', () => {
-    const keyId = elements.keyIdInput.value.trim();
-    if (keyId) {
-      sendWs('approve', { key_id: keyId });
-    } else {
-      appendLog('ERROR', 'Key ID is required');
-    }
-  });
+  // Show first vehicle with user's key
+  const v = vehicles[0];
+  el.infoVehicle.textContent = v.name || v.ble_address || '-';
 
-  elements.btnDelete.addEventListener('click', () => {
-    const keyId = elements.keyIdInput.value.trim();
-    if (keyId) {
-      sendWs('delete', { key_id: keyId });
-    } else {
-      appendLog('ERROR', 'Key ID is required');
-    }
-  });
+  // Find user's role in this vehicle
+  const account = data.account || '';
+  const keys = v.keys || [];
+  const myKey = keys.find(k => k.account === account);
+  el.infoRole.textContent = myKey ? myKey.role : '-';
 }
 
-// Scan
-function scanDevices() {
-  sendWs('scan');
-}
+// --- Auto-scan ---
 
-function setScanState(scanning) {
-  elements.btnScan.disabled = scanning;
-  elements.btnScan.textContent = scanning ? 'Scanning...' : 'Scan';
-}
+function handleAutoScan(data) {
+  switch (data.state) {
+    case 'scanning':
+      showCard('scanning');
+      clearProgress();
+      el.scanText.textContent = data.vehicles.length === 1
+        ? `Searching for ${data.vehicles[0]}...`
+        : `Searching for ${data.vehicles.length} vehicles...`;
+      el.scanDetail.textContent = '';
+      break;
 
-// Connect / Disconnect
-function toggleConnection() {
-  if (connected) {
-    sendWs('disconnect');
-    elements.connectProgress.style.display = 'none';
-  } else {
-    const address = elements.deviceSelect.value;
-    if (!address) return;
+    case 'found':
+      showCard('progress');
+      resetProgressSteps();
+      break;
 
-    // Show progress, reset steps
-    elements.connectProgress.style.display = 'flex';
-    stepStartTimes = {};
-    ['stepConnect', 'stepProvision', 'stepAuth', 'stepDeviceAuth', 'stepSubscribe'].forEach(id => {
-      const el = elements[id];
-      el.className = 'step';
-      el.querySelector('.step-detail').textContent = '';
-      el.querySelector('.step-time').textContent = '';
-    });
+    case 'not_found':
+      el.scanDetail.textContent = data.scan_count > 0
+        ? `${data.scan_count} BLE device(s) nearby`
+        : 'No BLE devices nearby';
+      break;
 
-    elements.btnConnect.disabled = true;
-    elements.btnScan.disabled = true;
-    sendWs('connect', { address });
+    case 'scan_error':
+      el.scanDetail.textContent = data.error;
+      break;
+
+    case 'no_vehicles':
+      el.scanText.textContent = 'No vehicles registered';
+      el.scanDetail.textContent = 'Add a vehicle in dk-server dashboard';
+      break;
   }
 }
 
-// Connect Progress
+// --- Card visibility ---
+
+function showCard(state) {
+  el.cardScanning.style.display = (state === 'scanning') ? '' : 'none';
+  el.cardProgress.style.display = (state === 'progress' || state === 'connected') ? '' : 'none';
+  el.cardLock.style.display = (state === 'connected') ? '' : 'none';
+  el.cardStatus.style.display = (state === 'connected') ? '' : 'none';
+}
+
+function resetProgressSteps() {
+  stepStartTimes = {};
+  STEP_EL_KEYS.forEach(id => {
+    const step = el[id];
+    if (!step) return;
+    step.className = 'step';
+    step.querySelector('.step-detail').textContent = '';
+    step.querySelector('.step-time').textContent = '';
+    step.querySelector('.step-icon').innerHTML = '&#9679;';
+  });
+}
+
+// --- Connect Progress ---
+
 function updateProgress(data) {
   const stepEl = document.getElementById(`step-${data.step}`);
   if (!stepEl) return;
 
-  stepEl.className = `step ${data.status}`;
-
-  // Detail text
-  const detailEl = stepEl.querySelector('.step-detail');
-  if (detailEl && data.detail) {
-    detailEl.textContent = data.detail;
+  if (data.step === 'connect' && data.status === 'in_progress') {
+    showCard('progress');
+    resetProgressSteps();
   }
 
-  // Elapsed time tracking
-  const timeEl = stepEl.querySelector('.step-time');
+  // Compute elapsed
+  let elapsed = '';
   if (data.status === 'in_progress') {
     stepStartTimes[data.step] = Date.now();
-    if (timeEl) timeEl.textContent = '';
-  } else if (stepStartTimes[data.step] && timeEl) {
-    const elapsed = Date.now() - stepStartTimes[data.step];
-    timeEl.textContent = formatElapsed(elapsed);
+  } else if (stepStartTimes[data.step]) {
+    elapsed = formatElapsed(Date.now() - stepStartTimes[data.step]);
   }
 
-  // Icon update
-  const iconEl = stepEl.querySelector('.step-icon');
-  if (iconEl) {
-    if (data.status === 'done') iconEl.innerHTML = '&#10003;';       // checkmark
-    else if (data.status === 'failed') iconEl.innerHTML = '&#10007;'; // cross
-    else if (data.status === 'skipped') iconEl.innerHTML = '&#8722;'; // minus
-    else if (data.status === 'in_progress') iconEl.innerHTML = '&#9679;'; // dot
-  }
+  applyStepUI(stepEl, data.status, data.detail, elapsed);
 
-  // Re-enable buttons when flow completes or fails
-  if (data.step === 'subscribe' && data.status === 'done') {
-    elements.btnConnect.disabled = false;
-    elements.btnConnect.textContent = 'Disconnect';
-  } else if (data.status === 'failed' && data.step === 'connect') {
-    elements.btnConnect.disabled = false;
-    elements.btnScan.disabled = false;
-  }
+  // Persist
+  savedSteps[data.step] = {
+    status: data.status,
+    detail: data.detail || '',
+    elapsed,
+  };
+  saveProgress();
 }
 
-function formatElapsed(ms) {
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
-
-// UI Updates
-function setConnectionStatus(status) {
-  connected = status === 'connected';
-  elements.btnConnect.textContent = connected ? 'Disconnect' : 'Connect';
-  elements.btnScan.disabled = connected;
-  elements.btnConnect.disabled = false;
-
-  if (!connected) {
-    elements.connectProgress.style.display = 'none';
-  }
-
-  updateControlButtons();
-}
-
-function updateControlButtons() {
-  elements.btnApprove.disabled = !connected;
-  elements.btnDelete.disabled = !connected;
-}
+// --- Status ---
 
 function updateStatus(data) {
   if (data.connected !== undefined) {
-    setConnectionStatus(data.connected ? 'connected' : 'disconnected');
+    connected = data.connected;
+    if (connected) {
+      showCard('connected');
+      restoreProgressUI();
+    } else {
+      showCard('scanning');
+    }
   }
 
-  if (data.auth_state !== undefined) {
-    elements.statusAuth.textContent = data.auth_state;
-  }
-
-  if (data.zone !== undefined) {
-    elements.statusZone.textContent = data.zone;
-  }
-
-  if (data.rssi !== undefined) {
-    elements.statusRssi.textContent = `${data.rssi} dBm`;
-  }
+  if (data.auth_state !== undefined) el.statusAuth.textContent = data.auth_state;
+  if (data.zone !== undefined) el.statusZone.textContent = data.zone;
+  if (data.rssi !== undefined) el.statusRssi.textContent = `${data.rssi} dBm`;
 
   if (data.lock_state !== undefined) {
-    elements.statusLock.textContent = data.lock_state;
-    elements.lockStateText.textContent = data.lock_state;
-
-    if (data.lock_state_raw === 1) {
-      elements.lockIndicator.className = 'lock-indicator unlocked';
-    } else {
-      elements.lockIndicator.className = 'lock-indicator locked';
-    }
+    el.statusLock.textContent = data.lock_state;
+    el.lockStateText.textContent = data.lock_state;
+    el.lockIndicator.className = data.lock_state_raw === 1
+      ? 'lock-indicator unlocked' : 'lock-indicator locked';
   }
 
-  if (data.registered_keys !== undefined) {
-    elements.statusRegKeys.textContent = data.registered_keys;
-  }
-
-  if (data.pending_keys !== undefined) {
-    elements.statusPendKeys.textContent = data.pending_keys;
-  }
+  if (data.registered_keys !== undefined) el.statusRegKeys.textContent = data.registered_keys;
+  if (data.pending_keys !== undefined) el.statusPendKeys.textContent = data.pending_keys;
 }
 
-function rebuildDeviceSelect() {
-  const prev = elements.deviceSelect.value;
-  elements.deviceSelect.innerHTML = '';
-
-  // Registered vehicles first (from dk-server)
-  const regAddresses = new Set();
-  registeredVehicles.forEach(v => {
-    const addr = v.ble_address || '';
-    if (!addr) return;
-    regAddresses.add(addr.toUpperCase());
-    const option = document.createElement('option');
-    option.value = addr;
-    option.textContent = `[R] ${v.name} (${addr})`;
-    elements.deviceSelect.appendChild(option);
-  });
-
-  // Scanned devices (skip duplicates already shown as registered)
-  devices.forEach(d => {
-    if (regAddresses.has((d.address || '').toUpperCase())) return;
-    const option = document.createElement('option');
-    option.value = d.address;
-    option.textContent = `${d.name} (${d.rssi} dBm)`;
-    elements.deviceSelect.appendChild(option);
-  });
-
-  const hasItems = elements.deviceSelect.options.length > 0;
-  if (!hasItems) {
-    const placeholder = document.createElement('option');
-    placeholder.value = '';
-    placeholder.textContent = 'Select a device';
-    elements.deviceSelect.appendChild(placeholder);
-    elements.deviceSelect.disabled = true;
-    elements.btnConnect.disabled = true;
-  } else {
-    elements.deviceSelect.disabled = false;
-    // Restore previous selection if still available
-    if (prev && [...elements.deviceSelect.options].some(o => o.value === prev)) {
-      elements.deviceSelect.value = prev;
-    } else {
-      elements.deviceSelect.selectedIndex = 0;
-    }
-    elements.btnConnect.disabled = false;
-  }
-}
+// --- Log ---
 
 function appendLog(level, message) {
   const line = document.createElement('div');
   line.className = `log-line ${level.toLowerCase()}`;
   line.textContent = `[${formatTime(new Date())}] ${level}: ${message}`;
-  elements.logContainer.appendChild(line);
-  elements.logContainer.scrollTop = elements.logContainer.scrollHeight;
+  el.logContainer.appendChild(line);
+  el.logContainer.scrollTop = el.logContainer.scrollHeight;
 
-  while (elements.logContainer.children.length > 100) {
-    elements.logContainer.removeChild(elements.logContainer.firstChild);
+  while (el.logContainer.children.length > 100) {
+    el.logContainer.removeChild(el.logContainer.firstChild);
   }
 }
 
-// Logout
+// --- Logout ---
+
 async function logout() {
-  try {
-    await fetch('/api/logout', { method: 'POST' });
-  } catch { /* ignore */ }
+  sendWs('disconnect');
+  try { await fetch('/api/logout', { method: 'POST' }); } catch { /* ignore */ }
+  clearProgress();
   sessionStorage.removeItem('dk_user');
   window.location.href = '/login';
 }
 
+// --- Formatters ---
+
+function formatElapsed(ms) {
+  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+}
+
 function formatTime(date) {
-  if (typeof date === 'string') {
-    date = new Date(date);
-  }
   return date.toLocaleTimeString('en-US', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
   });
 }

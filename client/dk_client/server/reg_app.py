@@ -195,6 +195,22 @@ async def api_provision(ble_address: str):
     return {"vehicle_id": None, "keys": []}
 
 
+@app.post("/api/provision/{ble_address}/device-key")
+async def api_register_device_key(ble_address: str, request: Request):
+    """ESP32 registers its device public key (simulates factory provisioning)."""
+    body = await request.json()
+    pubkey_hex = body.get("device_public_key", "").strip()
+    if not pubkey_hex:
+        return JSONResponse({"error": "device_public_key required"}, status_code=400)
+
+    addr_upper = ble_address.upper()
+    for v in load_vehicles():
+        if v.get("ble_address", "").upper() == addr_upper:
+            update_vehicle(v["id"], {"device_public_key": pubkey_hex})
+            return {"ok": True, "vehicle_id": v["id"]}
+    return JSONResponse({"error": "vehicle not found"}, status_code=404)
+
+
 # --- Share API ---
 
 @app.post("/api/vehicles/{vehicle_id}/share")

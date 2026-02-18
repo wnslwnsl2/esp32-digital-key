@@ -1,6 +1,7 @@
 #include "dk_cloud.h"
 #include "dk_wifi.h"
 #include "dk_keystore.h"
+#include "dk_auth.h"
 #include "ble_stack.h"
 
 #include <string.h>
@@ -48,6 +49,67 @@ static int hex_to_bytes(const char *hex, uint8_t *out, size_t max_len)
         out[i] = (uint8_t)byte;
     }
     return (int)(hex_len / 2);
+}
+
+/* ── Binary → hex string ─────────────────────────────────── */
+
+static void bytes_to_hex(const uint8_t *in, size_t len, char *out)
+{
+    for (size_t i = 0; i < len; i++) {
+        sprintf(out + i * 2, "%02x", in[i]);
+    }
+    out[len * 2] = '\0';
+}
+
+/* ── Register device public key with dk-server ───────────── */
+
+static void register_device_pubkey(void)
+{
+    uint8_t pubkey[65];
+    size_t  pubkey_len = sizeof(pubkey);
+    if (DkAuth_GetDevicePubkey(pubkey, &pubkey_len) != ESP_OK) {
+        ESP_LOGW(TAG, "failed to get device pubkey");
+        return;
+    }
+
+    char ble_addr[18];
+    BleStack_GetAddress(ble_addr, sizeof(ble_addr));
+
+    /* Build JSON: {"device_public_key": "04ab..."} */
+    char hex[131]; /* 65 bytes * 2 + 1 */
+    bytes_to_hex(pubkey, pubkey_len, hex);
+
+    cJSON *body = cJSON_CreateObject();
+    cJSON_AddStringToObject(body, "device_public_key", hex);
+    char *json_str = cJSON_PrintUnformatted(body);
+    cJSON_Delete(body);
+
+    /* POST /api/provision/{ble_address}/device-key */
+    char url[256];
+    snprintf(url, sizeof(url), "%s/api/provision/%s/device-key",
+             DK_SERVER_URL, ble_addr);
+
+    esp_http_client_config_t config = {
+        .url = url,
+        .method = HTTP_METHOD_POST,
+        .timeout_ms = 10000,
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+    esp_http_client_set_post_field(client, json_str, strlen(json_str));
+
+    esp_err_t err = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+    free(json_str);
+
+    if (err == ESP_OK && (status == 200 || status == 201)) {
+        ESP_LOGI(TAG, "device pubkey registered with server");
+    } else {
+        ESP_LOGW(TAG, "device pubkey registration failed: err=%s status=%d",
+                 esp_err_to_name(err), status);
+    }
 }
 
 /* ── Sync logic ───────────────────────────────────────────── */
@@ -174,6 +236,9 @@ static void cloud_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(2000));
     }
     ESP_LOGI(TAG, "WiFi connected, starting cloud key sync");
+
+    /* Register device public key with dk-server (simulates factory provisioning) */
+    register_device_pubkey();
 
     /* Initial sync */
     sync_keys();

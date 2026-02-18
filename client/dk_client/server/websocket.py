@@ -54,8 +54,6 @@ def _find_key_for_vehicle(address: str, vehicles: list[dict],
     """Find a key_id bound to the vehicle for the given account.
 
     Returns (key_id, vehicle_id) or (None, None).
-    If account is given, only keys belonging to that account are considered.
-    Falls back to local PEM discovery if no account match.
     """
     from dk_client.crypto import get_key_dir
 
@@ -65,13 +63,11 @@ def _find_key_for_vehicle(address: str, vehicles: list[dict],
     for v in vehicles:
         if v.get("ble_address", "").upper() == addr_upper:
             vid = v.get("id", "")
-            # Prefer account-matched keys (cloud keys)
             if account:
                 for k in v.get("keys", []):
                     kid = k.get("key_id", "")
                     if kid and k.get("account") == account:
                         return kid, vid
-            # Fallback: local PEM keys
             for k in v.get("keys", []):
                 kid = k.get("key_id", "")
                 if kid and (key_dir / f"{kid}.pem").exists():
@@ -88,30 +84,9 @@ def _get_device_pubkey(address: str, vehicles: list[dict]) -> str | None:
     return None
 
 
-async def _store_device_pubkey(address: str, pubkey_hex: str,
-                                vehicles: list[dict]) -> bool:
-    """Store device pubkey via dk-server PATCH /api/vehicles/{id}."""
-    addr_upper = address.upper()
-    vehicle_id = None
-    for v in vehicles:
-        if v.get("ble_address", "").upper() == addr_upper:
-            vehicle_id = v.get("id")
-            break
-    if not vehicle_id:
-        return False
-    try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            resp = await client.patch(
-                f"{DK_SERVER_URL}/api/vehicles/{vehicle_id}",
-                json={"device_public_key": pubkey_hex},
-            )
-            return resp.status_code == 200
-    except Exception:
-        return False
-
 
 from dk_client.crypto import (
-    load_or_create_key, get_public_key_bytes, sign_challenge,
+    load_or_create_key, sign_challenge,
     verify_device_signature,
 )
 
@@ -132,6 +107,7 @@ async def _fetch_private_key(vehicle_id: str, key_id: str):
     except Exception as e:
         logger.warning("Failed to fetch private key from server: %s", e)
     return None
+
 from dk_client.protocol import (
     AUTH_NAMES,
     CHR_AUTH_STATE,
@@ -139,7 +115,6 @@ from dk_client.protocol import (
     CHR_DEVICE_AUTH,
     CHR_DEVICE_PUBKEY,
     CHR_KEY_MGMT,
-    CHR_PROVISION,
     CHR_RESPONSE,
     CHR_SYSTEM_STATUS,
     KEY_MGMT_APPROVE,
@@ -156,8 +131,10 @@ clients: dict[str, tuple[WebSocket, str]] = {}
 
 # Shared BLE state
 ble_client: Optional[DkBleClient] = None
-scanned_devices: list[dict] = []
 last_status: Optional[SystemStatus] = None
+
+# Auto-scan task
+_auto_scan_task: Optional[asyncio.Task] = None
 
 
 async def broadcast(message: dict):
@@ -234,9 +211,120 @@ async def status_update_loop():
             await asyncio.sleep(1.0)
 
 
+# ---------------------------------------------------------------------------
+# Auto-scan: continuously scan and auto-connect to registered vehicles
+# ---------------------------------------------------------------------------
+
+async def _start_auto_scan():
+    """Start auto-scan background task if not already running."""
+    global _auto_scan_task
+    if _auto_scan_task and not _auto_scan_task.done():
+        return
+    _auto_scan_task = asyncio.create_task(_auto_scan_loop())
+
+
+async def _stop_auto_scan():
+    """Stop auto-scan background task."""
+    global _auto_scan_task
+    if _auto_scan_task and not _auto_scan_task.done():
+        _auto_scan_task.cancel()
+        try:
+            await _auto_scan_task
+        except asyncio.CancelledError:
+            pass
+    _auto_scan_task = None
+
+
+async def _auto_scan_loop():
+    """Continuously scan for registered vehicles and auto-connect."""
+    while True:
+        try:
+            # Already connected — just wait
+            if ble_client and ble_client.connected:
+                await asyncio.sleep(5.0)
+                continue
+
+            # No WebSocket clients — wait
+            if not clients:
+                await asyncio.sleep(2.0)
+                continue
+
+            # Get first client's account
+            first_client_id = None
+            account = ""
+            for cid, (_, owner) in clients.items():
+                first_client_id = cid
+                account = owner
+                break
+
+            # Fetch registered vehicles for this account
+            reg_vehicles = await fetch_registered_vehicles(account=account)
+            target_map: dict[str, dict] = {}
+            for v in reg_vehicles:
+                addr = (v.get("ble_address") or "").upper()
+                if addr:
+                    target_map[addr] = v
+
+            if not target_map:
+                await broadcast({"type": "auto_scan", "data": {
+                    "state": "no_vehicles",
+                }})
+                return  # Stop scanning — no vehicles to look for
+
+            # Broadcast scanning state with target vehicle names
+            vehicle_names = [v.get("name", "?") for v in target_map.values()]
+            await broadcast({"type": "auto_scan", "data": {
+                "state": "scanning",
+                "vehicles": vehicle_names,
+            }})
+
+            # BLE scan
+            try:
+                found = await scan(timeout=5.0)
+            except Exception as e:
+                await broadcast({"type": "auto_scan", "data": {
+                    "state": "scan_error",
+                    "error": str(e),
+                }})
+                await asyncio.sleep(5.0)
+                continue
+
+            # Check for matching device
+            matched = None
+            for d in found:
+                if d.address.upper() in target_map:
+                    matched = d
+                    break
+
+            if matched:
+                v = target_map[matched.address.upper()]
+                await broadcast({"type": "auto_scan", "data": {
+                    "state": "found",
+                    "vehicle": v.get("name", matched.address),
+                    "rssi": matched.rssi,
+                }})
+                await _connect_and_auth(first_client_id, matched.address)
+                # After connect (success or fail), loop continues
+            else:
+                await broadcast({"type": "auto_scan", "data": {
+                    "state": "not_found",
+                    "scan_count": len(found),
+                }})
+                await asyncio.sleep(3.0)
+
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            logger.exception("Auto-scan error")
+            await asyncio.sleep(5.0)
+
+
+# ---------------------------------------------------------------------------
+# WebSocket endpoint
+# ---------------------------------------------------------------------------
+
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    # Check session cookie before accepting
     from dk_client.server.app import validate_session, get_session_name, SESSION_COOKIE
 
     token = websocket.cookies.get(SESSION_COOKIE)
@@ -255,16 +343,18 @@ async def websocket_endpoint(websocket: WebSocket):
     # Subscribe to status notifications if already connected
     await _ensure_status_subscription()
 
+    # Start auto-scan (idempotent — only one task runs)
+    await _start_auto_scan()
+
     try:
-        # Send initial state (filtered by logged-in user's account)
+        # Send initial state with vehicle info
         reg_vehicles = await fetch_registered_vehicles(account=session_owner)
         await send_to_client(client_id, {
             "type": "init",
             "data": {
                 "client_id": client_id,
-                "devices": scanned_devices,
-                "scanning": _scanning,
-                "registered_vehicles": reg_vehicles,
+                "account": session_owner,
+                "vehicles": reg_vehicles,
             },
         })
         await broadcast_status()
@@ -281,6 +371,8 @@ async def websocket_endpoint(websocket: WebSocket):
         pass
     finally:
         clients.pop(client_id, None)
+        if not clients:
+            await _stop_auto_scan()
 
 
 async def _ensure_status_subscription():
@@ -299,70 +391,20 @@ async def _ensure_status_subscription():
             pass
 
 
-_scanning = False
-
-
-async def do_scan():
-    """Run BLE scan and broadcast results."""
-    global scanned_devices, _scanning
-    if _scanning:
-        return
-    _scanning = True
-    await broadcast({"type": "scan_state", "data": {"scanning": True}})
-    await broadcast_log("INFO", "Scanning for DK devices...")
-    try:
-        devices = await scan(timeout=5.0)
-        scanned_devices = [
-            {"name": d.name, "address": d.address, "rssi": d.rssi}
-            for d in devices
-        ]
-        await broadcast({
-            "type": "scan_result",
-            "data": scanned_devices,
-        })
-        await broadcast_log("INFO", f"Scan complete: {len(devices)} device(s) found")
-    except Exception as e:
-        logger.exception("BLE scan failed")
-        await broadcast_log("ERROR", f"Scan failed: {e}")
-    finally:
-        _scanning = False
-        await broadcast({"type": "scan_state", "data": {"scanning": False}})
-
-
 async def handle_ws_message(client_id: str, msg: dict):
-    global ble_client, scanned_devices, last_status
+    global ble_client, last_status
 
     msg_type = msg.get("type")
     data = msg.get("data", {})
 
-    if msg_type == "scan":
-        await do_scan()
-
-    elif msg_type == "connect":
-        address = data.get("address")
-        if not address:
-            await send_to_client(client_id, {
-                "type": "error",
-                "data": {"message": "Address required"},
-            })
-            return
-
-        await _connect_and_auth(client_id, address)
-
-    elif msg_type == "fetch_vehicles":
-        owner = get_client_owner(client_id)
-        vehicles = await fetch_registered_vehicles(account=owner)
-        await send_to_client(client_id, {
-            "type": "registered_vehicles",
-            "data": vehicles,
-        })
-
-    elif msg_type == "disconnect":
+    if msg_type == "disconnect":
         if ble_client and ble_client.connected:
             await ble_client.disconnect()
         last_status = None
         await broadcast_log("INFO", "Disconnected")
         await broadcast_status()
+        # Restart auto-scan
+        await _start_auto_scan()
 
     elif msg_type == "approve":
         await _key_mgmt_command(client_id, data, KEY_MGMT_APPROVE, "approve")
@@ -375,8 +417,10 @@ async def _on_ble_disconnect():
     """Called when the remote device terminates the BLE connection."""
     global last_status
     last_status = None
-    await broadcast_log("WARNING", "Device disconnected (remote)")
+    await broadcast_log("WARNING", "Device disconnected")
     await broadcast_status()
+    # Restart auto-scan to reconnect
+    await _start_auto_scan()
 
 
 async def _broadcast_progress(step: str, status: str, detail: str = ""):
@@ -388,7 +432,7 @@ async def _broadcast_progress(step: str, status: str, detail: str = ""):
 
 
 async def _connect_and_auth(client_id: str, address: str):
-    """Connect → Pair → Provision (if needed) → Auth → Subscribe status."""
+    """Connect -> Load key -> Auth -> Subscribe status."""
     global ble_client, last_status
 
     # Step 1: Connect
@@ -417,14 +461,14 @@ async def _connect_and_auth(client_id: str, address: str):
     await broadcast_log("INFO", f"Connected to {address}")
     await broadcast_status()
 
-    # Step 2: Provision — only allowed if key is bound in dk-server
+    # Step 2: Load key from dk-server
     session_owner = get_client_owner(client_id)
     reg_vehicles = await fetch_registered_vehicles()
     bound_key_id, vehicle_id = _find_key_for_vehicle(
         address, reg_vehicles, account=session_owner) if reg_vehicles else (None, None)
 
     if not bound_key_id:
-        await _broadcast_progress("provision", "failed", "Not authorized")
+        await _broadcast_progress("auth", "failed", "Not authorized")
         await broadcast_log("ERROR",
             "Key not registered in dk-server. "
             "Register vehicle and bind key first.")
@@ -445,19 +489,6 @@ async def _connect_and_auth(client_id: str, address: str):
         await broadcast_log("INFO", f"Using local key: {bound_key_id}")
 
     key_id = bound_key_id
-    pubkey = get_public_key_bytes(pk)
-
-    await _broadcast_progress("provision", "in_progress", key_id)
-    try:
-        key_id_bytes = key_id.encode("ascii").ljust(16, b"\x00")[:16]
-        await ble_client.write(CHR_PROVISION, key_id_bytes + pubkey)
-        await _broadcast_progress("provision", "done", key_id)
-        await broadcast_log("INFO", f"Provisioned key: {key_id}")
-    except Exception as e:
-        # Provision may fail if key already registered — continue to auth
-        detail = "Key already registered" if "NotPermitted" in str(e) else str(e)
-        await _broadcast_progress("provision", "skipped", detail)
-        await broadcast_log("INFO", f"Provision skipped: {detail}")
 
     # Step 3: Authenticate
     await _broadcast_progress("auth", "in_progress")
@@ -492,40 +523,38 @@ async def _connect_and_auth(client_id: str, address: str):
         }})
 
     # Step 3.5: Device Auth (mutual authentication)
+    # Device pubkey is pre-registered by ESP32 via WiFi (no TOFU)
     await _broadcast_progress("device_auth", "in_progress")
     try:
-        device_pubkey = await ble_client.read(CHR_DEVICE_PUBKEY)
-
-        # TOFU: compare with stored pubkey from dk-server
         expected_hex = _get_device_pubkey(address, reg_vehicles)
-        if expected_hex:
+        if not expected_hex:
+            await _broadcast_progress("device_auth", "skipped",
+                                      "Device pubkey not registered on server")
+            await broadcast_log("WARNING",
+                                "Device pubkey not found on dk-server. "
+                                "Is ESP32 WiFi connected?")
+        else:
+            device_pubkey = await ble_client.read(CHR_DEVICE_PUBKEY)
+
             if device_pubkey.hex() != expected_hex:
                 await _broadcast_progress("device_auth", "failed",
                                           "Pubkey mismatch — possible rogue device!")
                 await broadcast_log("WARNING",
-                                    "Device pubkey mismatch! Expected vs actual differ.")
+                                    "Device pubkey mismatch! BLE key differs from server.")
             else:
-                await broadcast_log("INFO", "Device pubkey verified (TOFU)")
-        else:
-            # First connection: store pubkey via dk-server
-            stored = await _store_device_pubkey(address, device_pubkey.hex(),
-                                                 reg_vehicles)
-            if stored:
-                await broadcast_log("INFO", "Device pubkey captured (TOFU first-use)")
-            else:
-                await broadcast_log("INFO", "Device pubkey noted (dk-server unavailable)")
+                await broadcast_log("INFO", "Device pubkey verified")
 
-        # Challenge-response
-        challenge = os.urandom(32)
-        await ble_client.write(CHR_DEVICE_AUTH, challenge)
-        sig = await ble_client.read(CHR_DEVICE_AUTH)
+                # Challenge-response
+                challenge = os.urandom(32)
+                await ble_client.write(CHR_DEVICE_AUTH, challenge)
+                sig = await ble_client.read(CHR_DEVICE_AUTH)
 
-        if verify_device_signature(device_pubkey, challenge, sig):
-            await _broadcast_progress("device_auth", "done", "Device verified")
-            await broadcast_log("INFO", "Device identity verified")
-        else:
-            await _broadcast_progress("device_auth", "failed", "Invalid signature")
-            await broadcast_log("WARNING", "Device signature verification failed")
+                if verify_device_signature(bytes(device_pubkey), challenge, bytes(sig)):
+                    await _broadcast_progress("device_auth", "done", "Device verified")
+                    await broadcast_log("INFO", "Device identity verified")
+                else:
+                    await _broadcast_progress("device_auth", "failed", "Invalid signature")
+                    await broadcast_log("WARNING", "Device signature verification failed")
     except Exception as e:
         detail = str(e)
         if "not found" in detail.lower() or "Not Found" in detail:
@@ -558,7 +587,6 @@ async def _key_mgmt_command(client_id: str, data: dict, cmd: int, action: str):
         return
 
     try:
-        # Authenticate as owner first
         key_id, pk = load_or_create_key()
         challenge = await ble_client.read(CHR_CHALLENGE)
         sig = sign_challenge(pk, challenge)
