@@ -86,11 +86,21 @@ class DkBleClient:
                 logger.error(f"connect retry failed: {e2}")
                 return False
 
-        if self.client.is_connected:
-            logger.info(f"connected to {self.address}")
-            return True
-        logger.error(f"not connected after connect() for {self.address}")
-        return False
+        if not self.client.is_connected:
+            logger.error(f"not connected after connect() for {self.address}")
+            return False
+
+        logger.info(f"connected to {self.address}")
+
+        try:
+            await self.client.pair()
+            logger.info("pairing complete")
+        except Exception as e:
+            logger.warning(f"pairing failed: {e}")
+            _bluez_remove(self.address)
+            return False
+
+        return True
 
     async def disconnect(self):
         if self.client and self.client.is_connected:
