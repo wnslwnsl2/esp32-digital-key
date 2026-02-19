@@ -125,6 +125,10 @@ function handleMessage(msg) {
       appendLog('INFO', 'Ready');
       break;
 
+    case 'vehicle_info':
+      displayInfo(msg.data);
+      break;
+
     case 'auto_scan':
       handleAutoScan(msg.data);
       break;

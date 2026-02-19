@@ -209,15 +209,34 @@ async def broadcast_status():
     await broadcast({"type": "status", "data": data})
 
 
+async def broadcast_vehicle_info():
+    """Fetch vehicles from dk-server and broadcast to all clients."""
+    if not clients:
+        return
+    for client_id, (_ws, account) in list(clients.items()):
+        vehicles = await fetch_registered_vehicles(account=account)
+        await send_to_client(client_id, {
+            "type": "vehicle_info",
+            "data": {"account": account, "vehicles": vehicles},
+        })
+
+
 async def status_update_loop():
-    """Background task to periodically broadcast status."""
+    """Background task to periodically broadcast status and vehicle info."""
+    vehicle_poll_counter = 0
     while True:
         try:
             if ble_client and ble_client.connected:
                 await broadcast_status()
                 await asyncio.sleep(0.5)
+                # Poll vehicle info every 5s (10 * 0.5s) when connected
+                vehicle_poll_counter += 1
+                if vehicle_poll_counter >= 10:
+                    vehicle_poll_counter = 0
+                    await broadcast_vehicle_info()
             else:
-                await asyncio.sleep(2.0)
+                await broadcast_vehicle_info()
+                await asyncio.sleep(5.0)
         except asyncio.CancelledError:
             break
         except Exception:
@@ -562,7 +581,10 @@ async def _connect_and_auth(client_id: str, address: str):
     }})
 
     # Step 3.5: Device Auth (mutual authentication)
-    # Device pubkey is pre-registered by ESP32 via WiFi (no TOFU)
+    # Re-fetch vehicles — ESP32 registers device pubkey at boot via WiFi
+    # (simulates factory provisioning), which may still be in-flight when
+    # dk-web first connects
+    reg_vehicles = await fetch_registered_vehicles()
     device_auth_ok = False
     await _broadcast_progress("device_auth", "in_progress")
     try:

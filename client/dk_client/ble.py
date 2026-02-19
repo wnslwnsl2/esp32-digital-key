@@ -91,15 +91,6 @@ class DkBleClient:
             return False
 
         logger.info(f"connected to {self.address}")
-
-        try:
-            await self.client.pair()
-            logger.info("pairing complete")
-        except Exception as e:
-            logger.warning(f"pairing failed: {e}")
-            _bluez_remove(self.address)
-            return False
-
         return True
 
     async def disconnect(self):
