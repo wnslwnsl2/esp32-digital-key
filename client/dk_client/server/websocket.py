@@ -282,7 +282,8 @@ async def _auto_scan_loop():
                 await broadcast({"type": "auto_scan", "data": {
                     "state": "no_vehicles",
                 }})
-                return  # Stop scanning — no vehicles to look for
+                await asyncio.sleep(3.0)
+                continue  # Keep polling — vehicle may be registered later
 
             # Broadcast scanning state with target vehicle names
             vehicle_names = [v.get("name", "?") for v in target_map.values()]
