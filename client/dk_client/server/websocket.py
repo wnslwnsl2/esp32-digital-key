@@ -86,27 +86,40 @@ def _get_device_pubkey(address: str, vehicles: list[dict]) -> str | None:
 
 
 from dk_client.crypto import (
-    load_or_create_key, sign_challenge,
+    get_public_key_bytes,
+    load_or_create_key,
+    sign_challenge,
     verify_device_signature,
 )
 
 
-async def _fetch_private_key(vehicle_id: str, key_id: str):
-    """Download private key PEM from dk-server and return a loaded EC private key."""
-    from cryptography.hazmat.primitives.serialization import load_pem_private_key
-
+async def _register_public_key(vehicle_id: str, key_id: str, pubkey_hex: str) -> bool:
+    """Register a client-generated public key with dk-server (write-once)."""
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(
-                f"{DK_SERVER_URL}/api/vehicles/{vehicle_id}/keys/{key_id}/private")
-            if resp.status_code == 200:
-                data = resp.json()
-                pem = data.get("private_key", "")
-                if pem:
-                    return load_pem_private_key(pem.encode(), password=None)
+            resp = await client.put(
+                f"{DK_SERVER_URL}/api/vehicles/{vehicle_id}/keys/{key_id}/pubkey",
+                json={"public_key": pubkey_hex})
+            return resp.status_code == 200
     except Exception as e:
-        logger.warning("Failed to fetch private key from server: %s", e)
-    return None
+        logger.warning("Failed to register public key: %s", e)
+    return False
+
+
+async def _key_needs_registration(vehicle_id: str, key_id: str) -> bool:
+    """Check if a key_id has no public_key registered on dk-server."""
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(f"{DK_SERVER_URL}/api/vehicles")
+            if resp.status_code == 200:
+                for v in resp.json():
+                    if v.get("id") == vehicle_id:
+                        for k in v.get("keys", []):
+                            if k.get("key_id") == key_id:
+                                return not k.get("public_key")
+    except Exception as e:
+        logger.warning("Failed to check key registration: %s", e)
+    return False
 
 from dk_client.protocol import (
     AUTH_NAMES,
@@ -461,7 +474,7 @@ async def _connect_and_auth(client_id: str, address: str):
     await broadcast_log("INFO", f"Connected to {address}")
     await broadcast_status()
 
-    # Step 2: Load key from dk-server
+    # Step 2: Load/create key locally
     session_owner = get_client_owner(client_id)
     reg_vehicles = await fetch_registered_vehicles()
     bound_key_id, vehicle_id = _find_key_for_vehicle(
@@ -476,51 +489,70 @@ async def _connect_and_auth(client_id: str, address: str):
         await broadcast_status()
         return
 
-    # Try to load private key from dk-server (cloud key)
-    pk = None
-    if vehicle_id:
-        pk = await _fetch_private_key(vehicle_id, bound_key_id)
-        if pk:
-            await broadcast_log("INFO", f"Using cloud key: {bound_key_id}")
+    # Always use local key (generate if not exists)
+    key_id, pk = load_or_create_key(key_id=bound_key_id)
+    await broadcast_log("INFO", f"Using local key: {key_id}")
 
-    # Fallback to local PEM
-    if pk is None:
-        bound_key_id, pk = load_or_create_key(key_id=bound_key_id)
-        await broadcast_log("INFO", f"Using local key: {bound_key_id}")
-
-    key_id = bound_key_id
-
-    # Step 3: Authenticate
-    await _broadcast_progress("auth", "in_progress")
-    try:
-        challenge = await ble_client.read(CHR_CHALLENGE)
-        sig = sign_challenge(pk, challenge)
-        key_id_bytes = key_id.encode("ascii").ljust(16, b"\x00")[:16]
-        await ble_client.write(CHR_RESPONSE, key_id_bytes + sig)
-
-        state_bytes = await ble_client.read(CHR_AUTH_STATE)
-        state = state_bytes[0]
-        auth_name = AUTH_NAMES.get(state, "?")
-        success = state == 3  # AUTH_OK
-
-        if success:
-            await _broadcast_progress("auth", "done", auth_name)
-            await broadcast_log("INFO", f"Authenticated ({auth_name})")
-            asyncio.ensure_future(report_event(address, key_id, "auth", "ok"))
+    # Register pubkey with server if needed
+    just_registered = False
+    if vehicle_id and await _key_needs_registration(vehicle_id, key_id):
+        await _broadcast_progress("key_register", "in_progress")
+        pubkey_hex = get_public_key_bytes(pk).hex()
+        ok = await _register_public_key(vehicle_id, key_id, pubkey_hex)
+        if ok:
+            just_registered = True
+            await _broadcast_progress("key_register", "done", "Public key registered")
+            await broadcast_log("INFO", "Public key registered with server")
         else:
-            await _broadcast_progress("auth", "failed", auth_name)
-            await broadcast_log("WARNING", f"Auth state: {auth_name}")
-            asyncio.ensure_future(report_event(address, key_id, "auth", f"failed: {auth_name}"))
+            await _broadcast_progress("key_register", "failed", "Registration failed")
+            await broadcast_log("ERROR", "Failed to register public key")
+            await ble_client.disconnect()
+            await broadcast_status()
+            return
 
-        await broadcast({"type": "auth_result", "data": {
-            "success": success, "state": auth_name, "state_raw": state,
-        }})
-    except Exception as e:
-        await _broadcast_progress("auth", "failed", str(e))
-        await broadcast_log("ERROR", f"Auth failed: {e}")
-        await broadcast({"type": "auth_result", "data": {
-            "success": False, "error": str(e),
-        }})
+    # Step 3: Authenticate (with retry for freshly registered keys)
+    await _broadcast_progress("auth", "in_progress")
+    max_attempts = 3 if just_registered else 1
+    auth_success = False
+    state = 0
+    auth_name = "FAILED"
+
+    for attempt in range(max_attempts):
+        try:
+            challenge = await ble_client.read(CHR_CHALLENGE)
+            sig = sign_challenge(pk, challenge)
+            key_id_bytes = key_id.encode("ascii").ljust(16, b"\x00")[:16]
+            await ble_client.write(CHR_RESPONSE, key_id_bytes + sig)
+
+            state_bytes = await ble_client.read(CHR_AUTH_STATE)
+            state = state_bytes[0]
+            auth_name = AUTH_NAMES.get(state, "?")
+            auth_success = state == 3  # AUTH_OK
+
+            if auth_success:
+                await _broadcast_progress("auth", "done", auth_name)
+                await broadcast_log("INFO", f"Authenticated ({auth_name})")
+                asyncio.ensure_future(report_event(address, key_id, "auth", "ok"))
+                break
+            elif just_registered and attempt < max_attempts - 1:
+                await broadcast_log("INFO",
+                    f"Waiting for ESP32 key sync (attempt {attempt + 1}/{max_attempts})...")
+                await asyncio.sleep(3.0)
+            else:
+                await _broadcast_progress("auth", "failed", auth_name)
+                await broadcast_log("WARNING", f"Auth state: {auth_name}")
+                asyncio.ensure_future(report_event(address, key_id, "auth", f"failed: {auth_name}"))
+        except Exception as e:
+            await _broadcast_progress("auth", "failed", str(e))
+            await broadcast_log("ERROR", f"Auth failed: {e}")
+            auth_success = False
+            break
+
+    await broadcast({"type": "auth_result", "data": {
+        "success": auth_success,
+        "state": auth_name,
+        "state_raw": state,
+    }})
 
     # Step 3.5: Device Auth (mutual authentication)
     # Device pubkey is pre-registered by ESP32 via WiFi (no TOFU)

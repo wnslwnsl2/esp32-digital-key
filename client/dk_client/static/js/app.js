@@ -10,8 +10,8 @@ let currentVehicleId = null;
 let currentAccount = '';
 let isOwner = false;
 
-const STEP_IDS = ['connect', 'auth', 'device_auth', 'subscribe'];
-const STEP_EL_KEYS = ['stepConnect', 'stepAuth', 'stepDeviceAuth', 'stepSubscribe'];
+const STEP_IDS = ['connect', 'key_register', 'auth', 'device_auth', 'subscribe'];
+const STEP_EL_KEYS = ['stepConnect', 'stepKeyRegister', 'stepAuth', 'stepDeviceAuth', 'stepSubscribe'];
 const STORAGE_KEY = 'dk_progress';
 
 const el = {
@@ -22,6 +22,7 @@ const el = {
   scanText: document.getElementById('scan-text'),
   scanDetail: document.getElementById('scan-detail'),
   stepConnect: document.getElementById('step-connect'),
+  stepKeyRegister: document.getElementById('step-key_register'),
   stepAuth: document.getElementById('step-auth'),
   stepDeviceAuth: document.getElementById('step-device_auth'),
   stepSubscribe: document.getElementById('step-subscribe'),

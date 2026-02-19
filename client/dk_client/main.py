@@ -12,7 +12,6 @@ from .protocol import (
     CHR_AUTH_STATE,
     CHR_CHALLENGE,
     CHR_KEY_MGMT,
-    CHR_PROVISION,
     CHR_RESPONSE,
     CHR_SYSTEM_STATUS,
     KEY_MGMT_APPROVE,
@@ -114,27 +113,6 @@ async def cmd_scan(args):
     for d in devices:
         print(f"  {d.name:<12} {d.address}   RSSI: {d.rssi} dBm")
     print()
-
-
-async def cmd_provision(args):
-    key_id, pk = load_or_create_key()
-    _show_key(key_id, pk)
-
-    client = DkBleClient(args.addr)
-    await _connect(client)
-
-    _header("Provision")
-    pubkey = get_public_key_bytes(pk)
-    key_id_bytes = key_id.encode("ascii").ljust(16, b"\x00")[:16]
-    data = key_id_bytes + pubkey
-    _info("Key ID", f"{key_id} ({len(key_id_bytes)} bytes)")
-    _info("Public key", f"{pubkey[:4].hex()}...{pubkey[-4:].hex()} ({len(pubkey)} bytes)")
-    _info("Payload", f"{len(data)} bytes")
-    print("   Writing provision data...")
-    await client.write(CHR_PROVISION, data)
-    _ok("Provisioned")
-
-    await _disconnect(client)
 
 
 async def cmd_auth(args):
@@ -254,10 +232,6 @@ def main():
     p_scan = sub.add_parser("scan", help="Scan for DK devices")
     p_scan.add_argument("--timeout", type=float, default=5.0)
 
-    # provision
-    p_prov = sub.add_parser("provision", help="Register key with device")
-    p_prov.add_argument("addr", help="Device BLE address")
-
     # auth
     p_auth = sub.add_parser("auth", help="Challenge-response authentication")
     p_auth.add_argument("addr", help="Device BLE address")
@@ -280,7 +254,6 @@ def main():
 
     handlers = {
         "scan": cmd_scan,
-        "provision": cmd_provision,
         "auth": cmd_auth,
         "status": cmd_status,
         "approve": cmd_approve,

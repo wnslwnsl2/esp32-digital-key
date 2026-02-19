@@ -5,9 +5,6 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives import serialization
-
 DATA_DIR = Path.home() / ".dk-client"
 VEHICLES_FILE = DATA_DIR / "vehicles.json"
 EVENTS_FILE = DATA_DIR / "events.jsonl"
@@ -70,24 +67,13 @@ def update_vehicle(vehicle_id: str, fields: dict):
 
 # --- Keys ---
 
-def _generate_keypair() -> tuple[str, str, str]:
-    """Generate an ECC P-256 keypair. Returns (key_id, public_key_hex, private_key_pem)."""
-    private_key = ec.generate_private_key(ec.SECP256R1())
-    public_key_bytes = private_key.public_key().public_bytes(
-        serialization.Encoding.X962,
-        serialization.PublicFormat.UncompressedPoint,
-    )
-    private_pem = private_key.private_bytes(
-        serialization.Encoding.PEM,
-        serialization.PrivateFormat.PKCS8,
-        serialization.NoEncryption(),
-    ).decode()
-    key_id = uuid.uuid4().hex[:16]
-    return key_id, public_key_bytes.hex(), private_pem
+def _generate_key_id() -> str:
+    """Generate a 16-char hex key ID (no keypair — client generates locally)."""
+    return uuid.uuid4().hex[:16]
 
 
 def add_key(vehicle_id: str, key_id: str, public_key: str, role: str,
-            account: str = "", private_key: str = "", expires_at: str | None = None):
+            account: str = "", expires_at: str | None = None):
     vehicles = load_vehicles()
     for v in vehicles:
         if v["id"] == vehicle_id:
@@ -101,13 +87,27 @@ def add_key(vehicle_id: str, key_id: str, public_key: str, role: str,
                 "account": account,
                 "created_at": datetime.now().isoformat(),
             }
-            if private_key:
-                entry["private_key"] = private_key
             if expires_at:
                 entry["expires_at"] = expires_at
             v["keys"].append(entry)
             save_vehicles(vehicles)
             return
+    raise ValueError(f"Vehicle {vehicle_id} not found")
+
+
+def update_key_pubkey(vehicle_id: str, key_id: str, public_key: str):
+    """Write-once: set public_key for a key that has none yet."""
+    vehicles = load_vehicles()
+    for v in vehicles:
+        if v["id"] == vehicle_id:
+            for k in v["keys"]:
+                if k["key_id"] == key_id:
+                    if k.get("public_key"):
+                        raise ValueError(f"Key {key_id} already has a public key")
+                    k["public_key"] = public_key
+                    save_vehicles(vehicles)
+                    return
+            raise ValueError(f"Key {key_id} not found")
     raise ValueError(f"Vehicle {vehicle_id} not found")
 
 

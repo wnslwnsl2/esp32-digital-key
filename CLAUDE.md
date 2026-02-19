@@ -109,8 +109,8 @@ UUID: `12345678-1234-1234-1234-123456789abc`
 
 1. **Setup**: dk-server에서 계정 생성 → 차량 등록 → owner 지정
 2. **Cloud sync**: ESP32가 WiFi로 dk-server에서 public key 수신 + device pubkey 등록
-3. **Connect**: dk-web 로그인 → auto-scan → BLE 연결 → 챌린지-응답 인증 → 상호 인증
-4. **Share**: dk-web에서 owner가 다른 계정에 키 공유 → ESP32가 WiFi로 자동 수신
+3. **Connect**: dk-web 로그인 → auto-scan → BLE 연결 → 로컬 키 생성 + pubkey 등록 → 챌린지-응답 인증 → 상호 인증
+4. **Share**: dk-web에서 owner가 다른 계정에 키 공유 → 대상 dk-web이 첫 연결 시 로컬 키 생성 + pubkey 등록
 
 ## Reference Repos
 

@@ -24,7 +24,6 @@ static const ble_uuid128_t s_svc_uuid       = BLE_UUID128_INIT(DK_SVC_UUID);
 static const ble_uuid128_t s_auth_state_uuid = DK_CHR_UUID128(0x01);
 static const ble_uuid128_t s_challenge_uuid  = DK_CHR_UUID128(0x02);
 static const ble_uuid128_t s_response_uuid   = DK_CHR_UUID128(0x03);
-static const ble_uuid128_t s_provision_uuid  = DK_CHR_UUID128(0x04);
 static const ble_uuid128_t s_status_uuid     = DK_CHR_UUID128(0x06);
 static const ble_uuid128_t s_key_mgmt_uuid       = DK_CHR_UUID128(0x07);
 static const ble_uuid128_t s_device_pubkey_uuid  = DK_CHR_UUID128(0x08);
@@ -96,31 +95,6 @@ static int response_access(uint16_t conn_handle, uint16_t attr_handle,
     }
 
     return (ret == ESP_OK) ? 0 : BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
-}
-
-static int provision_access(uint16_t conn_handle, uint16_t attr_handle,
-                             struct ble_gatt_access_ctxt *ctxt, void *arg)
-{
-    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
-
-    uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
-    uint8_t buf[128];
-    if (len < 16 + 33 || len > sizeof(buf)) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
-
-    os_mbuf_copydata(ctxt->om, 0, len, buf);
-
-    char key_id[16];
-    memcpy(key_id, buf, 16);
-    const uint8_t *pubkey = buf + 16;
-    size_t pubkey_len = len - 16;
-
-    esp_err_t ret = DkKeystore_AddKey(key_id, pubkey, pubkey_len);
-    if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "provision failed: %s", esp_err_to_name(ret));
-        return BLE_ATT_ERR_WRITE_NOT_PERMITTED;
-    }
-
-    return 0;
 }
 
 static int system_status_access(uint16_t conn_handle, uint16_t attr_handle,
@@ -265,12 +239,6 @@ static const struct ble_gatt_svc_def s_gatt_svcs[] = {
             {
                 .uuid = &s_response_uuid.u,
                 .access_cb = response_access,
-                .flags = BLE_GATT_CHR_F_WRITE,
-            },
-            /* 04: Provision (Write) */
-            {
-                .uuid = &s_provision_uuid.u,
-                .access_cb = provision_access,
                 .flags = BLE_GATT_CHR_F_WRITE,
             },
             /* 06: System Status (Read | Notify) */

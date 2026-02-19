@@ -22,7 +22,7 @@ Port 8100                      Port 8000                   BLE + WiFi
 
 | Component | Role | 실무 대응 |
 |-----------|------|----------|
-| `dk-server` | 키 생성, 차량/계정 관리, 딜러 대시보드 | OEM Backend (BMW Connected, Mercedes me) |
+| `dk-server` | key_id 발급, 차량/계정 관리, 딜러 대시보드 | OEM Backend (BMW Connected, Mercedes me) |
 | `dk-web` | BLE 연결, 인증, 잠금 제어, 키 공유 | Mobile App (스마트폰 앱) |
 | ESP32 | BLE GATT 서비스, ECC 인증, WiFi 키 수신 | Vehicle ECU (디지털 키 모듈) |
 
@@ -30,9 +30,10 @@ Port 8100                      Port 8000                   BLE + WiFi
 
 **서버가 권한의 원천(Source of Authority)**
 
-- dk-server가 모든 키를 생성하고 관리한다
+- dk-server가 key_id와 역할(role)을 관리한다
+- dk-web이 로컬에서 ECC P-256 키페어를 생성하고 서버에 public key만 등록한다
+- Private key는 네트워크를 타지 않고 클라이언트 로컬에만 저장된다
 - ESP32는 WiFi로 서버에서 승인된 public key만 수신한다
-- dk-web은 서버에서 private key를 다운로드하여 인증에 사용한다
 - 키 공유/회수는 서버 통해 이루어지고, ESP32가 자동 동기화한다
 
 **상호 인증(Mutual Authentication)**
@@ -79,9 +80,9 @@ dk-web                    dk-server                    ESP32
   │                          │                           │
   │ ① BLE Connect ──────────────────────────────────────►│
   │                          │                           │
-  │ ② Private key 다운로드   │                           │
-  │ ────────────────────────►│                           │
-  │◄──── PEM 응답 ──────────│                           │
+  │ ② 로컬 키 생성 (없으면)  │                           │
+  │    pubkey 서버 등록       │                           │
+  │ ────── PUT pubkey ──────►│                           │
   │                          │                           │
   │ ③ Challenge 읽기 ◄──────────────────────────────────│  32-byte random
   │    ECDSA 서명            │                           │
@@ -108,18 +109,19 @@ Owner (dk-web)          dk-server              ESP32
   │  (계정, role 선택)     │                     │
   │                        │                     │
   ├─ POST /api/share ─────►│                     │
-  │                        ├─ 새 키페어 생성      │
-  │                        │                     │
-  │                        │  WiFi: 새 pubkey     │
-  │                        │────────────────────►│  다음 폴링에서 수신
-  │                        │                     │
+  │                        ├─ key_id만 생성       │
   │                        │                     │
 공유 대상 (dk-web)         │                     │
   │                        │                     │
   ├─ PIN 로그인 ──────────►│                     │
   │◄── 공유된 차량 목록 ───│                     │
   │                        │                     │
-  ├─ Auto-scan → BLE 연결 → 인증 성공            │
+  ├─ Auto-scan → BLE 연결  │                     │
+  │  로컬 키 생성           │                     │
+  ├─ PUT pubkey ──────────►│                     │
+  │                        │  WiFi: pubkey        │
+  │                        │────────────────────►│  다음 폴링에서 수신
+  ├─ 인증 성공 (retry)      │                     │
 ```
 
 ### 4. 키 회수
@@ -163,7 +165,7 @@ Owner (dk-web)          dk-server              ESP32
 ### Client → Vehicle (챌린지-응답)
 
 1. ESP32가 32-byte random challenge 생성
-2. dk-web이 dk-server에서 받은 private key로 ECDSA-SHA256 서명
+2. dk-web이 로컬 생성한 private key로 ECDSA-SHA256 서명
 3. ESP32가 NVS에 저장된 public key로 서명 검증
 4. 검증 성공 → AUTH_OK, 실패 → AUTH_FAILED
 
@@ -221,7 +223,7 @@ GPIO 0 (BOOT 버튼) 3초 long press:
 |-------|-----------|
 | 사용자 인증 | ECC P-256 Challenge-Response (ECDSA-SHA256) |
 | 차량 인증 | Device pubkey 검증 + 챌린지-응답 (상호 인증) |
-| 키 관리 | dk-server 중앙 생성/관리, WiFi로 ESP32에 배포 |
+| 키 관리 | dk-web 로컬 키 생성, pubkey만 서버 등록, WiFi로 ESP32에 배포 |
 | 근접 | BLE RSSI Passive Entry (자동 잠금/해제) |
 | 계정 | PIN 인증 (SHA-256 + salt) |
 | 리셋 | 물리 버튼 (BOOT 3초) — 원격 리셋 불가 |

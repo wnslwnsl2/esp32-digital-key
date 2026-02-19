@@ -28,18 +28,18 @@ class NoCacheMiddleware(BaseHTTPMiddleware):
 
 
 from dk_client.server.store import (
-    _generate_keypair,
+    _generate_key_id,
     add_key,
     add_vehicle,
     append_event,
     delete_key,
     delete_vehicle,
     get_events,
-    get_key,
     get_keys_for_account,
     get_vehicle,
     list_local_keys,
     load_vehicles,
+    update_key_pubkey,
     update_vehicle,
 )
 
@@ -146,26 +146,28 @@ async def api_add_key(vehicle_id: str, request: Request):
     if not account:
         return JSONResponse({"error": "account required"}, status_code=400)
 
-    # Auto-generate keypair
-    key_id, public_key, private_key = _generate_keypair()
+    # Generate key_id only — client generates keypair locally
+    key_id = _generate_key_id()
     try:
-        add_key(vehicle_id, key_id, public_key, role,
-                account=account, private_key=private_key, expires_at=expires_at)
+        add_key(vehicle_id, key_id, "", role,
+                account=account, expires_at=expires_at)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return {"ok": True, "key_id": key_id}
 
 
-@app.get("/api/vehicles/{vehicle_id}/keys/{key_id}/private")
-async def api_get_private_key(vehicle_id: str, key_id: str):
-    """Return private key PEM for dk-web to download."""
-    k = get_key(vehicle_id, key_id)
-    if not k:
-        return JSONResponse({"error": "key not found"}, status_code=404)
-    pem = k.get("private_key", "")
-    if not pem:
-        return JSONResponse({"error": "no private key"}, status_code=404)
-    return {"key_id": key_id, "private_key": pem, "public_key": k.get("public_key", "")}
+@app.put("/api/vehicles/{vehicle_id}/keys/{key_id}/pubkey")
+async def api_register_pubkey(vehicle_id: str, key_id: str, request: Request):
+    """Register a client-generated public key (write-once)."""
+    body = await request.json()
+    public_key = body.get("public_key", "").strip()
+    if not public_key:
+        return JSONResponse({"error": "public_key required"}, status_code=400)
+    try:
+        update_key_pubkey(vehicle_id, key_id, public_key)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True}
 
 
 @app.delete("/api/vehicles/{vehicle_id}/keys/{key_id}")
@@ -187,10 +189,12 @@ async def api_provision(ble_address: str):
         if v.get("ble_address", "").upper() == addr_upper:
             keys = []
             for k in v.get("keys", []):
-                keys.append({
-                    "key_id": k["key_id"],
-                    "public_key": k.get("public_key", ""),
-                })
+                pub = k.get("public_key", "")
+                if pub:  # Only provision keys with registered pubkey
+                    keys.append({
+                        "key_id": k["key_id"],
+                        "public_key": pub,
+                    })
             return {"vehicle_id": v["id"], "keys": keys}
     return {"vehicle_id": None, "keys": []}
 
@@ -223,10 +227,10 @@ async def api_share_vehicle(vehicle_id: str, request: Request):
     if not account:
         return JSONResponse({"error": "account required"}, status_code=400)
 
-    key_id, public_key, private_key = _generate_keypair()
+    key_id = _generate_key_id()
     try:
-        add_key(vehicle_id, key_id, public_key, role,
-                account=account, private_key=private_key, expires_at=expires_at)
+        add_key(vehicle_id, key_id, "", role,
+                account=account, expires_at=expires_at)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return {"ok": True, "key_id": key_id}
