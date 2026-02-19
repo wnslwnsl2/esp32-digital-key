@@ -8,12 +8,11 @@
                      0x34, 0x12, 0x34, 0x12, 0x34, 0x12, \
                      0x78, 0x56, 0x34, 0x12
 
-/* Characteristic UUIDs (last byte varies: 01..07) */
+/* Characteristic UUIDs (last byte varies: 01..09) */
 #define DK_CHR_AUTH_STATE_UUID    0x01
 #define DK_CHR_CHALLENGE_UUID     0x02
 #define DK_CHR_RESPONSE_UUID      0x03
 #define DK_CHR_PROVISION_UUID     0x04
-#define DK_CHR_LOCK_CMD_UUID      0x05
 #define DK_CHR_SYSTEM_STATUS_UUID 0x06
 #define DK_CHR_KEY_MGMT_UUID      0x07
 #define DK_CHR_DEVICE_PUBKEY_UUID 0x08

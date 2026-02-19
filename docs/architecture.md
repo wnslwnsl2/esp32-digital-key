@@ -13,7 +13,7 @@ Port 8100                      Port 8000                   BLE + WiFi
 │ Vehicle Registry │◄─────────│ Auto-scan       │◄────────│ NimBLE Stack │
 │ Key Generation   │  키/인증  │ Challenge-Resp  │ Auth/Cmd│ ECC Auth     │
 │ Account/PIN Auth │──────────►│ Key Sharing     │────────►│ NVS Keystore │
-│ Event Log        │           │ Lock Control    │         │ WiFi Cloud   │
+│ Event Log        │           │ Passive Entry   │         │ WiFi Cloud   │
 └──────────────────┘           └─────────────────┘         └──────────────┘
         │                                                         │
         │              WiFi HTTP (키 동기화)                        │
@@ -96,8 +96,7 @@ dk-web                    dk-server                    ESP32
   │                          │                           │
   │ ⑦ Status Subscribe ─────────────────────────────────►│  200ms 주기
   │                          │                           │
-  │ ⑧ Unlock/Lock Cmd ──────────────────────────────────►│
-  │                          │                    RSSI ◄─│  자동 잠금
+  │                          │                    RSSI ◄─│  Passive Entry (자동 잠금/해제)
 ```
 
 ### 3. 키 공유 (Key Sharing)
@@ -185,7 +184,6 @@ UUID: `12345678-1234-1234-1234-123456789abc`
 | Auth State | 01 | R/N | 연결별 인증 상태 |
 | Challenge | 02 | R | 32-byte random (읽을 때 생성) |
 | Response | 03 | W | key_id(16) + ECDSA sig |
-| Lock Cmd | 05 | W | 0=lock, 1=unlock |
 | System Status | 06 | R/N | 8-byte packed (200ms) |
 | Key Mgmt | 07 | W | cmd(1) + key_id(16) |
 | Device Pubkey | 08 | R | 65-byte uncompressed EC point |
@@ -224,7 +222,7 @@ GPIO 0 (BOOT 버튼) 3초 long press:
 | 사용자 인증 | ECC P-256 Challenge-Response (ECDSA-SHA256) |
 | 차량 인증 | Device pubkey 검증 + 챌린지-응답 (상호 인증) |
 | 키 관리 | dk-server 중앙 생성/관리, WiFi로 ESP32에 배포 |
-| 근접 | BLE RSSI 기반 자동 잠금 |
+| 근접 | BLE RSSI Passive Entry (자동 잠금/해제) |
 | 계정 | PIN 인증 (SHA-256 + salt) |
 | 리셋 | 물리 버튼 (BOOT 3초) — 원격 리셋 불가 |
 

@@ -12,7 +12,6 @@ from .protocol import (
     CHR_AUTH_STATE,
     CHR_CHALLENGE,
     CHR_KEY_MGMT,
-    CHR_LOCK_CMD,
     CHR_PROVISION,
     CHR_RESPONSE,
     CHR_SYSTEM_STATUS,
@@ -148,46 +147,6 @@ async def cmd_auth(args):
     await _disconnect(client)
 
 
-async def cmd_unlock(args):
-    key_id, pk = load_or_create_key()
-    _show_key(key_id, pk)
-
-    client = DkBleClient(args.addr)
-    await _connect(client)
-
-    ok = await _authenticate(client, key_id, pk)
-    if not ok:
-        await _disconnect(client)
-        return
-
-    _header("Unlock")
-    print("   Sending unlock command...")
-    await client.write(CHR_LOCK_CMD, bytes([0x01]))
-    _ok("Unlock command sent")
-
-    await _disconnect(client)
-
-
-async def cmd_lock(args):
-    key_id, pk = load_or_create_key()
-    _show_key(key_id, pk)
-
-    client = DkBleClient(args.addr)
-    await _connect(client)
-
-    ok = await _authenticate(client, key_id, pk)
-    if not ok:
-        await _disconnect(client)
-        return
-
-    _header("Lock")
-    print("   Sending lock command...")
-    await client.write(CHR_LOCK_CMD, bytes([0x00]))
-    _ok("Lock command sent")
-
-    await _disconnect(client)
-
-
 async def cmd_status(args):
     key_id, pk = load_or_create_key()
     _show_key(key_id, pk)
@@ -303,14 +262,6 @@ def main():
     p_auth = sub.add_parser("auth", help="Challenge-response authentication")
     p_auth.add_argument("addr", help="Device BLE address")
 
-    # unlock
-    p_unlock = sub.add_parser("unlock", help="Unlock")
-    p_unlock.add_argument("addr", help="Device BLE address")
-
-    # lock
-    p_lock = sub.add_parser("lock", help="Lock")
-    p_lock.add_argument("addr", help="Device BLE address")
-
     # status
     p_status = sub.add_parser("status", help="Monitor system status")
     p_status.add_argument("addr", help="Device BLE address")
@@ -331,8 +282,6 @@ def main():
         "scan": cmd_scan,
         "provision": cmd_provision,
         "auth": cmd_auth,
-        "unlock": cmd_unlock,
-        "lock": cmd_lock,
         "status": cmd_status,
         "approve": cmd_approve,
         "delete": cmd_delete,

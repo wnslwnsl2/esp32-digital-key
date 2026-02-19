@@ -18,7 +18,7 @@ OEM Backend / 딜러 대시보드    사용자 Web UI                BLE + WiFi
 │ 키 생성/관리      │  HTTP  │ Auto-scan       │  BLE   │ NimBLE GATT      │
 │ 차량/계정 등록    │◄──────│ 챌린지-응답 인증  │◄──────│ ECC P-256 인증    │
 │ PIN 인증         │───────►│ 키 공유 (owner)  │──────►│ NVS Keystore     │
-│ 이벤트 로그       │        │ 잠금/해제        │        │ WiFi 키 동기화    │
+│ 이벤트 로그       │        │ Passive Entry    │        │ WiFi 키 동기화    │
 └──────────────────┘        └─────────────────┘        └──────────────────┘
 ```
 
@@ -71,7 +71,6 @@ UUID: `12345678-1234-1234-1234-123456789abc`
 | Auth State | 01 | R/N | Per-conn auth state |
 | Challenge | 02 | R | 32-byte random (generated on read) |
 | Response | 03 | W | key_id(16) + ECDSA sig |
-| Lock Cmd | 05 | W | 0=lock, 1=unlock |
 | System Status | 06 | R/N | 8-byte packed status (200ms) |
 | Key Mgmt | 07 | W | cmd(1) + key_id(16) |
 | Device Pubkey | 08 | R | 65-byte uncompressed EC point |

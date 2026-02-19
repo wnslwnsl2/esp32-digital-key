@@ -25,7 +25,6 @@ static const ble_uuid128_t s_auth_state_uuid = DK_CHR_UUID128(0x01);
 static const ble_uuid128_t s_challenge_uuid  = DK_CHR_UUID128(0x02);
 static const ble_uuid128_t s_response_uuid   = DK_CHR_UUID128(0x03);
 static const ble_uuid128_t s_provision_uuid  = DK_CHR_UUID128(0x04);
-static const ble_uuid128_t s_lock_cmd_uuid   = DK_CHR_UUID128(0x05);
 static const ble_uuid128_t s_status_uuid     = DK_CHR_UUID128(0x06);
 static const ble_uuid128_t s_key_mgmt_uuid       = DK_CHR_UUID128(0x07);
 static const ble_uuid128_t s_device_pubkey_uuid  = DK_CHR_UUID128(0x08);
@@ -121,23 +120,6 @@ static int provision_access(uint16_t conn_handle, uint16_t attr_handle,
         return BLE_ATT_ERR_WRITE_NOT_PERMITTED;
     }
 
-    return 0;
-}
-
-static int lock_cmd_access(uint16_t conn_handle, uint16_t attr_handle,
-                            struct ble_gatt_access_ctxt *ctxt, void *arg)
-{
-    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
-
-    uint8_t cmd;
-    uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
-    if (len != 1) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
-    os_mbuf_copydata(ctxt->om, 0, 1, &cmd);
-
-    esp_err_t ret = DkLock_Command(conn_handle, cmd);
-    if (ret != ESP_OK) {
-        return BLE_ATT_ERR_WRITE_NOT_PERMITTED;
-    }
     return 0;
 }
 
@@ -289,12 +271,6 @@ static const struct ble_gatt_svc_def s_gatt_svcs[] = {
             {
                 .uuid = &s_provision_uuid.u,
                 .access_cb = provision_access,
-                .flags = BLE_GATT_CHR_F_WRITE,
-            },
-            /* 05: Lock Command (Write) */
-            {
-                .uuid = &s_lock_cmd_uuid.u,
-                .access_cb = lock_cmd_access,
                 .flags = BLE_GATT_CHR_F_WRITE,
             },
             /* 06: System Status (Read | Notify) */
