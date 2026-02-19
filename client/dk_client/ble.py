@@ -35,7 +35,7 @@ class ScannedDevice:
     rssi: int
 
 
-async def scan(timeout: float = 5.0) -> list[ScannedDevice]:
+async def scan(timeout: float = 3.0) -> list[ScannedDevice]:
     """Scan for DK-xxxx devices."""
     devices = await BleakScanner.discover(timeout=timeout, return_adv=True)
     results: list[ScannedDevice] = []

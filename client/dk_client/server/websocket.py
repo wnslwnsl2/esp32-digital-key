@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 import uuid
 from datetime import datetime
 from typing import Optional
@@ -32,8 +33,22 @@ async def report_event(vehicle_addr: str, key_id: str, event: str, detail: str =
         pass
 
 
+_vehicle_cache: dict[str, tuple[float, list[dict]]] = {}
+_VEHICLE_CACHE_TTL = 5.0  # seconds
+
+
 async def fetch_registered_vehicles(owner: str = "", account: str = "") -> list[dict]:
-    """Fetch registered vehicles from dk-server. Returns empty list on failure."""
+    """Fetch registered vehicles from dk-server. Returns empty list on failure.
+
+    Results are cached for 5 seconds to avoid redundant HTTP calls during
+    the auto-scan → connect → auth flow.
+    """
+    cache_key = f"{owner}|{account}"
+    now = time.monotonic()
+    cached = _vehicle_cache.get(cache_key)
+    if cached and (now - cached[0]) < _VEHICLE_CACHE_TTL:
+        return cached[1]
+
     try:
         params = {}
         if owner:
@@ -43,7 +58,9 @@ async def fetch_registered_vehicles(owner: str = "", account: str = "") -> list[
         async with httpx.AsyncClient(timeout=3.0) as client:
             resp = await client.get(f"{DK_SERVER_URL}/api/vehicles", params=params)
             if resp.status_code == 200:
-                return resp.json()
+                result = resp.json()
+                _vehicle_cache[cache_key] = (now, result)
+                return result
     except Exception:
         pass
     return []
@@ -105,21 +122,6 @@ async def _register_public_key(vehicle_id: str, key_id: str, pubkey_hex: str) ->
         logger.warning("Failed to register public key: %s", e)
     return False
 
-
-async def _key_needs_registration(vehicle_id: str, key_id: str) -> bool:
-    """Check if a key_id has no public_key registered on dk-server."""
-    try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            resp = await client.get(f"{DK_SERVER_URL}/api/vehicles")
-            if resp.status_code == 200:
-                for v in resp.json():
-                    if v.get("id") == vehicle_id:
-                        for k in v.get("keys", []):
-                            if k.get("key_id") == key_id:
-                                return not k.get("public_key")
-    except Exception as e:
-        logger.warning("Failed to check key registration: %s", e)
-    return False
 
 from dk_client.protocol import (
     AUTH_NAMES,
@@ -289,8 +291,12 @@ async def _auto_scan_loop():
                 account = owner
                 break
 
-            # Fetch registered vehicles for this account
-            reg_vehicles = await fetch_registered_vehicles(account=account)
+            # Fetch vehicles and BLE scan in parallel
+            reg_vehicles, found = await asyncio.gather(
+                fetch_registered_vehicles(account=account),
+                scan(),
+            )
+
             target_map: dict[str, dict] = {}
             for v in reg_vehicles:
                 addr = (v.get("ble_address") or "").upper()
@@ -303,24 +309,6 @@ async def _auto_scan_loop():
                 }})
                 await asyncio.sleep(3.0)
                 continue  # Keep polling — vehicle may be registered later
-
-            # Broadcast scanning state with target vehicle names
-            vehicle_names = [v.get("name", "?") for v in target_map.values()]
-            await broadcast({"type": "auto_scan", "data": {
-                "state": "scanning",
-                "vehicles": vehicle_names,
-            }})
-
-            # BLE scan
-            try:
-                found = await scan(timeout=5.0)
-            except Exception as e:
-                await broadcast({"type": "auto_scan", "data": {
-                    "state": "scan_error",
-                    "error": str(e),
-                }})
-                await asyncio.sleep(5.0)
-                continue
 
             # Check for matching device
             matched = None
@@ -349,7 +337,7 @@ async def _auto_scan_loop():
                     "state": "not_found",
                     "scan_count": len(found),
                 }})
-                await asyncio.sleep(3.0)
+                await asyncio.sleep(2.0)
 
         except asyncio.CancelledError:
             break
@@ -473,8 +461,15 @@ async def _pre_register_pubkey(address: str, vehicles: list[dict],
         address, vehicles, account=account) if vehicles else (None, None)
     if not bound_key_id or not vehicle_id:
         return
-    if not await _key_needs_registration(vehicle_id, bound_key_id):
-        return
+
+    # Check if public_key already registered using existing vehicles data
+    # (avoids an extra HTTP round-trip)
+    for v in vehicles:
+        if v.get("id") == vehicle_id:
+            for k in v.get("keys", []):
+                if k.get("key_id") == bound_key_id and k.get("public_key"):
+                    return  # Already registered
+            break
 
     await _broadcast_progress("key_register", "in_progress")
     key_id, pk = load_or_create_key(key_id=bound_key_id)
