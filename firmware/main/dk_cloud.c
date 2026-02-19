@@ -164,7 +164,11 @@ static void sync_keys(void)
     }
 
     int server_count = cJSON_GetArraySize(keys_arr);
-    ESP_LOGI(TAG, "server has %d keys for %s", server_count, ble_addr);
+    static int s_last_server_count = -1;
+    if (server_count != s_last_server_count) {
+        ESP_LOGI(TAG, "server has %d keys for %s", server_count, ble_addr);
+        s_last_server_count = server_count;
+    }
 
     /* Track which server key_ids we've seen (for deletion) */
     char server_ids[DK_MAX_KEYS][16];
@@ -219,6 +223,7 @@ static void sync_keys(void)
         }
         if (!found) {
             ESP_LOGI(TAG, "revoking key not on server: %.16s", local_kid);
+            DkAuth_DisconnectByKey(local_kid);
             DkKeystore_DeleteKey(local_kid);
         }
     }

@@ -54,3 +54,6 @@ esp_err_t DkAuth_SignChallenge(dk_conn_state_t *conn,
 
 /** Terminate all active BLE connections. */
 void DkAuth_DisconnectAll(void);
+
+/** Disconnect any connection authenticated with the given key_id. */
+void DkAuth_DisconnectByKey(const char key_id[16]);

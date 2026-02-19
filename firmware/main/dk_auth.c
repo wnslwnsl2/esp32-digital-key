@@ -249,6 +249,20 @@ void DkAuth_DisconnectAll(void)
     }
 }
 
+void DkAuth_DisconnectByKey(const char key_id[16])
+{
+    for (int i = 0; i < DK_MAX_CONNECTIONS; i++) {
+        if (s_conns[i].conn_handle != 0xFFFF &&
+            s_conns[i].auth_state == DK_AUTH_OK &&
+            memcmp(s_conns[i].key_id, key_id, 16) == 0) {
+            ESP_LOGI(TAG, "disconnecting conn=%d (revoked key %.16s)",
+                     s_conns[i].conn_handle, key_id);
+            ble_gap_terminate(s_conns[i].conn_handle,
+                              BLE_ERR_REM_USER_CONN_TERM);
+        }
+    }
+}
+
 /* ── Challenge generation ────────────────────────────────── */
 
 esp_err_t DkAuth_GenerateChallenge(dk_conn_state_t *conn)

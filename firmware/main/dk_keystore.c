@@ -73,7 +73,7 @@ esp_err_t DkKeystore_AddKey(const char *key_id,
     /* Check duplicate */
     for (int i = 0; i < s_key_count; i++) {
         if (memcmp(s_keys[i].key_id, key_id, 16) == 0) {
-            ESP_LOGW(TAG, "duplicate key_id: %.16s", key_id);
+            ESP_LOGD(TAG, "duplicate key_id: %.16s", key_id);
             return ESP_ERR_INVALID_STATE;
         }
     }

@@ -317,6 +317,12 @@ async def _auto_scan_loop():
                     "vehicle": v.get("name", matched.address),
                     "rssi": matched.rssi,
                 }})
+
+                # Pre-register pubkey before BLE connect so ESP32 can
+                # sync it during the connection setup (~2s poll)
+                await _pre_register_pubkey(
+                    matched.address, reg_vehicles, account)
+
                 await _connect_and_auth(first_client_id, matched.address)
                 # After connect (success or fail), loop continues
             else:
@@ -437,6 +443,32 @@ async def _on_ble_disconnect():
     await _start_auto_scan()
 
 
+async def _pre_register_pubkey(address: str, vehicles: list[dict],
+                               account: str):
+    """Generate local key and register pubkey with server BEFORE BLE connect.
+
+    This gives ESP32 time to sync the pubkey during BLE connection setup
+    (~2s poll interval), avoiding auth retry delays.
+    """
+    bound_key_id, vehicle_id = _find_key_for_vehicle(
+        address, vehicles, account=account) if vehicles else (None, None)
+    if not bound_key_id or not vehicle_id:
+        return
+    if not await _key_needs_registration(vehicle_id, bound_key_id):
+        return
+
+    await _broadcast_progress("key_register", "in_progress")
+    key_id, pk = load_or_create_key(key_id=bound_key_id)
+    pubkey_hex = get_public_key_bytes(pk).hex()
+    ok = await _register_public_key(vehicle_id, key_id, pubkey_hex)
+    if ok:
+        await _broadcast_progress("key_register", "done", "Public key registered")
+        await broadcast_log("INFO", "Public key registered with server")
+    else:
+        await _broadcast_progress("key_register", "failed", "Registration failed")
+        await broadcast_log("ERROR", "Failed to register public key")
+
+
 async def _broadcast_progress(step: str, status: str, detail: str = ""):
     """Broadcast connect/auth progress to all clients."""
     await broadcast({
@@ -494,60 +526,34 @@ async def _connect_and_auth(client_id: str, address: str):
     key_id, pk = load_or_create_key(key_id=bound_key_id)
     await broadcast_log("INFO", f"Using local key: {key_id}")
 
-    # Register pubkey with server if needed
-    just_registered = False
-    if vehicle_id and await _key_needs_registration(vehicle_id, key_id):
-        await _broadcast_progress("key_register", "in_progress")
-        pubkey_hex = get_public_key_bytes(pk).hex()
-        ok = await _register_public_key(vehicle_id, key_id, pubkey_hex)
-        if ok:
-            just_registered = True
-            await _broadcast_progress("key_register", "done", "Public key registered")
-            await broadcast_log("INFO", "Public key registered with server")
-        else:
-            await _broadcast_progress("key_register", "failed", "Registration failed")
-            await broadcast_log("ERROR", "Failed to register public key")
-            await ble_client.disconnect()
-            await broadcast_status()
-            return
-
-    # Step 3: Authenticate (with retry for freshly registered keys)
+    # Step 3: Authenticate
     await _broadcast_progress("auth", "in_progress")
-    max_attempts = 3 if just_registered else 1
     auth_success = False
     state = 0
     auth_name = "FAILED"
 
-    for attempt in range(max_attempts):
-        try:
-            challenge = await ble_client.read(CHR_CHALLENGE)
-            sig = sign_challenge(pk, challenge)
-            key_id_bytes = key_id.encode("ascii").ljust(16, b"\x00")[:16]
-            await ble_client.write(CHR_RESPONSE, key_id_bytes + sig)
+    try:
+        challenge = await ble_client.read(CHR_CHALLENGE)
+        sig = sign_challenge(pk, challenge)
+        key_id_bytes = key_id.encode("ascii").ljust(16, b"\x00")[:16]
+        await ble_client.write(CHR_RESPONSE, key_id_bytes + sig)
 
-            state_bytes = await ble_client.read(CHR_AUTH_STATE)
-            state = state_bytes[0]
-            auth_name = AUTH_NAMES.get(state, "?")
-            auth_success = state == 3  # AUTH_OK
+        state_bytes = await ble_client.read(CHR_AUTH_STATE)
+        state = state_bytes[0]
+        auth_name = AUTH_NAMES.get(state, "?")
+        auth_success = state == 3  # AUTH_OK
 
-            if auth_success:
-                await _broadcast_progress("auth", "done", auth_name)
-                await broadcast_log("INFO", f"Authenticated ({auth_name})")
-                asyncio.ensure_future(report_event(address, key_id, "auth", "ok"))
-                break
-            elif just_registered and attempt < max_attempts - 1:
-                await broadcast_log("INFO",
-                    f"Waiting for ESP32 key sync (attempt {attempt + 1}/{max_attempts})...")
-                await asyncio.sleep(3.0)
-            else:
-                await _broadcast_progress("auth", "failed", auth_name)
-                await broadcast_log("WARNING", f"Auth state: {auth_name}")
-                asyncio.ensure_future(report_event(address, key_id, "auth", f"failed: {auth_name}"))
-        except Exception as e:
-            await _broadcast_progress("auth", "failed", str(e))
-            await broadcast_log("ERROR", f"Auth failed: {e}")
-            auth_success = False
-            break
+        if auth_success:
+            await _broadcast_progress("auth", "done", auth_name)
+            await broadcast_log("INFO", f"Authenticated ({auth_name})")
+            asyncio.ensure_future(report_event(address, key_id, "auth", "ok"))
+        else:
+            await _broadcast_progress("auth", "failed", auth_name)
+            await broadcast_log("WARNING", f"Auth state: {auth_name}")
+            asyncio.ensure_future(report_event(address, key_id, "auth", f"failed: {auth_name}"))
+    except Exception as e:
+        await _broadcast_progress("auth", "failed", str(e))
+        await broadcast_log("ERROR", f"Auth failed: {e}")
 
     await broadcast({"type": "auth_result", "data": {
         "success": auth_success,
@@ -557,13 +563,14 @@ async def _connect_and_auth(client_id: str, address: str):
 
     # Step 3.5: Device Auth (mutual authentication)
     # Device pubkey is pre-registered by ESP32 via WiFi (no TOFU)
+    device_auth_ok = False
     await _broadcast_progress("device_auth", "in_progress")
     try:
         expected_hex = _get_device_pubkey(address, reg_vehicles)
         if not expected_hex:
-            await _broadcast_progress("device_auth", "skipped",
-                                      "Device pubkey not registered on server")
-            await broadcast_log("WARNING",
+            await _broadcast_progress("device_auth", "failed",
+                                      "Device pubkey not on server")
+            await broadcast_log("ERROR",
                                 "Device pubkey not found on dk-server. "
                                 "Is ESP32 WiFi connected?")
         else:
@@ -572,7 +579,7 @@ async def _connect_and_auth(client_id: str, address: str):
             if device_pubkey.hex() != expected_hex:
                 await _broadcast_progress("device_auth", "failed",
                                           "Pubkey mismatch — possible rogue device!")
-                await broadcast_log("WARNING",
+                await broadcast_log("ERROR",
                                     "Device pubkey mismatch! BLE key differs from server.")
             else:
                 await broadcast_log("INFO", "Device pubkey verified")
@@ -585,15 +592,22 @@ async def _connect_and_auth(client_id: str, address: str):
                 if verify_device_signature(bytes(device_pubkey), challenge, bytes(sig)):
                     await _broadcast_progress("device_auth", "done", "Device verified")
                     await broadcast_log("INFO", "Device identity verified")
+                    device_auth_ok = True
                 else:
                     await _broadcast_progress("device_auth", "failed", "Invalid signature")
-                    await broadcast_log("WARNING", "Device signature verification failed")
+                    await broadcast_log("ERROR", "Device signature verification failed")
     except Exception as e:
         detail = str(e)
         if "not found" in detail.lower() or "Not Found" in detail:
             detail = "Characteristic not found (old firmware?)"
-        await _broadcast_progress("device_auth", "skipped", detail)
-        await broadcast_log("INFO", f"Device auth skipped: {detail}")
+        await _broadcast_progress("device_auth", "failed", detail)
+        await broadcast_log("ERROR", f"Device auth failed: {detail}")
+
+    if not device_auth_ok:
+        await broadcast_log("ERROR", "Disconnecting — device not verified")
+        await ble_client.disconnect()
+        await broadcast_status()
+        return
 
     # Step 4: Subscribe to status notifications
     await _broadcast_progress("subscribe", "in_progress")
