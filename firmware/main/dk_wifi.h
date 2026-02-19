@@ -8,7 +8,7 @@
 #define DK_WIFI_SSID            "KT_GiGA_59AC"          /* empty = WiFi disabled */
 #define DK_WIFI_PASSWORD        "dgx96cx101"
 #define DK_SERVER_URL           "http://dk-server.local:8100"
-#define DK_CLOUD_POLL_INTERVAL_S 30
+#define DK_CLOUD_POLL_INTERVAL_S 2
 
 /**
  * Initialize WiFi station and connect.
