@@ -195,8 +195,12 @@ async def api_provision(ble_address: str):
                         "key_id": k["key_id"],
                         "public_key": pub,
                     })
-            return {"vehicle_id": v["id"], "keys": keys}
-    return {"vehicle_id": None, "keys": []}
+            return {
+                "vehicle_id": v["id"],
+                "keys": keys,
+                "has_device_key": bool(v.get("device_public_key")),
+            }
+    return {"vehicle_id": None, "keys": [], "has_device_key": False}
 
 
 @app.post("/api/provision/{ble_address}/device-key")

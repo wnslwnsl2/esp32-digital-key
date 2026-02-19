@@ -157,6 +157,13 @@ static void sync_keys(void)
         return;
     }
 
+    /* Re-register device pubkey if server lost it (e.g. vehicle recreated) */
+    cJSON *has_dk = cJSON_GetObjectItem(root, "has_device_key");
+    if (cJSON_IsBool(has_dk) && !cJSON_IsTrue(has_dk)) {
+        ESP_LOGW(TAG, "server missing device pubkey, re-registering");
+        register_device_pubkey();
+    }
+
     cJSON *keys_arr = cJSON_GetObjectItem(root, "keys");
     if (!cJSON_IsArray(keys_arr)) {
         cJSON_Delete(root);
