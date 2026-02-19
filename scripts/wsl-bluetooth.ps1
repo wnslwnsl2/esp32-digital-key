@@ -11,7 +11,6 @@ param(
 
 # ── Device VID:PID ──────────────────────────────────────
 $devices = @{
-    "Bluetooth" = "8087:0026"   # Intel Wireless Bluetooth
     "ESP32"     = "303a:1001"   # USB JTAG/serial debug unit
 }
 
@@ -50,14 +49,6 @@ if ($Detach) {
         usbipd attach --wsl --busid $busid
     }
 
-    # Start BlueZ
-    Write-Host ""
-    Write-Host "Starting BlueZ in WSL..."
-    wsl -u root service bluetooth start
-    wsl bluetoothctl show
-    Write-Host ""
-    Write-Host "=== Connected BLE devices ==="
-    wsl bluetoothctl devices Connected
     Write-Host ""
     Write-Host "Done. ESP32 available at /dev/ttyACM0 or /dev/ttyUSB0"
 }
